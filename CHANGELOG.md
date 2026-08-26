@@ -31,6 +31,9 @@ The project is currently experimental and does not yet use formal releases.
 - Regression tests that reject PDFs containing signature fields and verify preservation of supported image dictionary semantics such as `/Interpolate` and `/StructParent`.
 - Structure-coverage tests for shared image XObjects nested in reusable Form XObjects, bookmark preservation, AcroForm field preservation, and embedded-file preservation.
 - PDF/A identification-metadata detection for the image route; matching PDFs return `pdf-a-unsupported` without writing output.
+- Second-stage image downsampling fallback for image-heavy PDFs when full-resolution JPEG quality search cannot meet the target.
+- `--min-scale` CLI control, per-attempt scale reporting, and selected-scale result metadata.
+- Regression coverage for explicit `target-not-met`, downsampling order, minimum-scale exhaustion, and soft-mask fail-closed behavior.
 
 ### Changed
 
@@ -41,6 +44,7 @@ The project is currently experimental and does not yet use formal releases.
 - PDFs containing signature fields or certification-permissions structures are rejected by the image execution PoC because a full rewrite may invalidate signatures.
 - Standard PDF/A XMP identification markers are now treated as a fail-closed boundary until post-rewrite PDF/A conformance can be validated.
 - Restored the repository-level `*.pdf` ignore guard so real/private PDFs are not accidentally staged; only explicitly whitelisted synthetic fixtures under `tests/fixtures/` may be tracked.
+- Image fitting now exhausts the configured full-resolution JPEG-quality range before considering downsampling; the fallback searches for the largest 1%-granularity image scale that can fit at the configured minimum JPEG quality, then raises JPEG quality at that scale as far as the target permits.
 
 ### Notes
 
@@ -48,3 +52,4 @@ The project is currently experimental and does not yet use formal releases.
 - No production compression engine, GUI, installer, or release artifact exists yet.
 - Real municipal source documents used for local validation are intentionally excluded from the repository.
 - Image replacement remains deliberately conservative: unsupported masks, color spaces, bit depths, decoding structures, unknown image dictionary semantics, signed/certified PDFs, or PDF/A-identified PDFs return a fail-closed result rather than being rewritten silently.
+- Downsampling currently refuses images with `/SMask`; resizing a base image without resizing its soft mask would create a dimension mismatch, so synchronized soft-mask scaling is deferred.
