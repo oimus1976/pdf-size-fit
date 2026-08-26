@@ -29,19 +29,28 @@ Synthetic unit tests exercise all diagnosis outcomes without committing multi-me
 
 ## Image-route execution validation
 
-The image-XObject execution PoC adds synthetic tests for:
+The image-XObject execution PoC has synthetic coverage for:
 
 - successful target fitting,
 - highest-quality refinement after a coarse quality probe crosses the target,
 - source-file immutability,
 - compatible `/SMask` preservation,
-- annotation and metadata retention in a synthetic sample,
+- annotation and metadata retention,
 - no output when the file is already below target,
-- no output when diagnosis selects a different route.
+- no output when diagnosis selects a different route,
+- signed/certified PDF refusal,
+- preservation of supported image dictionary semantics such as `/Interpolate` and `/StructParent`,
+- a shared image XObject nested in a Form XObject and reused across two pages,
+- bookmark preservation,
+- AcroForm field/value preservation,
+- embedded-file preservation,
+- fail-closed refusal when standard PDF/A identification metadata is present.
 
-Current local suite result after adding these tests: `12 passed`.
+Current local review-suite result after adding this coverage: **`17 passed`**.
 
-For T02b, the real-world image-heavy sample was also rendered with PDFium before and after the structure-preserving quality-100 replacement. Across all 11 pages at render scale 1, the observed page-wise maximum MAE was about 0.098, maximum channel difference was 4, and minimum PSNR was about 56.9 dB. These numbers are sample-specific evidence only.
+The shared-Form fixture confirmed that one nested image reused across two pages remains one shared indirect image after compression and is counted as one replacement. A render comparison also confirmed that both pages remain renderable after replacement; as expected for lossy JPEG recompression, pixel differences exist and this synthetic noise fixture is not used as a perceptual-quality benchmark.
+
+For T02b, the real-world image-heavy sample was rendered with PDFium before and after the structure-preserving quality-100 replacement. Across all 11 pages at render scale 1, the observed page-wise maximum MAE was about 0.098, maximum channel difference was 4, and minimum PSNR was about 56.9 dB. These numbers are sample-specific evidence only.
 
 ## T01 notes
 
@@ -81,16 +90,13 @@ It exists to validate routing and the color-vector fallback without placing real
 
 The current evidence is intentionally narrow. Before broad compatibility claims, add tests for at least:
 
-- shared image resources reused across pages/forms,
-- image XObjects nested inside Form XObjects,
 - additional color spaces and bit depths,
-- color-key masks and unusual transparency combinations,
-- PDFs with links/bookmarks,
-- annotations/forms,
-- signed PDFs,
-- embedded files,
-- transparency and unusual color spaces,
+- color-key masks and additional transparency combinations,
+- optional-content and unusual image dictionary combinations,
 - rotated/mixed-size pages,
 - very long PDFs and memory limits,
 - target-not-met behavior when JPEG quality alone cannot reach the target,
-- failure/rollback behavior.
+- failure/rollback behavior,
+- whether PDF/A support is feasible with a local conformance-validation step rather than unconditional refusal.
+
+Shared Form-XObject images, bookmarks, a basic AcroForm field, embedded files, signed-PDF refusal, and PDF/A-marker refusal now have synthetic regression coverage but are not broad compatibility guarantees.
