@@ -24,14 +24,20 @@ The project is currently experimental and does not yet use formal releases.
 - Regression coverage for color content appearing only on a middle page.
 - Validation for invalid target-byte values and fail-closed `unclassified` behavior.
 - CI coverage for Python 3.11 and 3.12.
+- Image-heavy target-size fitting PoC using pypdf's public image replacement API.
+- Image-fit CLI with target-byte and minimum-quality controls.
+- Quality search that starts at JPEG quality 100, probes downward, and refines the first successful interval without cumulative recompression.
+- Tests for image-route fitting, source immutability, compatible soft-mask preservation, annotation/metadata retention, skip behavior, and route-mismatch fail-closed behavior.
 
 ### Changed
 
 - Color routing now scans every page at low resolution and uses the maximum per-page color fraction, reducing the risk of incorrectly classifying a partially color document as monochrome.
 - Raw-stream sizing falls back to pypdf stream serialization if private `_data` storage is unavailable instead of relying on parsed `/Length`.
+- The image-heavy route now preserves the original PDF object/page structure and replaces only supported image XObjects instead of reconstructing each page in a new PDF.
 
 ### Notes
 
 - No application license has been selected yet.
 - No production compression engine, GUI, installer, or release artifact exists yet.
 - Real municipal source documents used for local validation are intentionally excluded from the repository.
+- Image replacement remains deliberately conservative: unsupported masks, color spaces, bit depths, or decoding structures return a fail-closed result rather than being flattened silently.
