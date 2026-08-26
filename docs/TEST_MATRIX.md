@@ -10,8 +10,21 @@ Real municipal documents are used only for local/private validation and must not
 | T02 | Image-heavy, approximately one full-page image per page | Private real-world sample | 10,478,354 bytes | Re-encode page images as JPEG quality 100; keep pixel dimensions | 8,767,488 bytes | Under target with small measured pixel differences in sampled pages |
 | T03 | Color abnormal vector/outline | Synthetic fixture | 17,327,349 bytes | PDFium render -> RGB JPEG, 200 dpi / quality 90 | 9,475,016 bytes | Under nominal 10,000,000-byte target |
 | T03b | Color abnormal vector/outline | Same synthetic fixture | 17,327,349 bytes | PDFium render -> RGB JPEG, 180 dpi / quality 92 | 9,159,915 bytes | Also under target; not yet selected as preferred search result |
-| T04 | Mixed image/text presentation PDF | Private real-world sample | already below target | No processing | unchanged | Expected behavior is skip/no compression |
+| T04 | Mixed image/text presentation PDF | Private real-world sample | 5,042,912 bytes | No processing | unchanged | Below target; automatic diagnosis returns `skip` |
 | T05 | Typical Word/Excel-derived text/table PDFs | Public reference samples used locally | already well below target | No processing | unchanged | Not a primary compression target; useful as skip/regression cases |
+
+## Automatic routing validation
+
+The diagnosis PoC was run against the available representative samples with `target_bytes=10_000_000`:
+
+| Sample | Expected | Observed | Evidence |
+|---|---|---|---|
+| T01 monochrome abnormal vector | `vector-monochrome` | `vector-monochrome` | images 0.0%; page/form streams 99.9%; sampled colored pixels 0.0% |
+| T02 image-heavy | `image-heavy` | `image-heavy` | encoded images 99.8%; page content approximately 0.0% |
+| T03 color abnormal vector | `vector-color` | `vector-color` | images 0.0%; page/form streams about 100.0%; sampled colored pixels 93.9% |
+| T04 already-small presentation | `skip` | `skip` | 5,042,912 bytes <= 10,000,000-byte target |
+
+Synthetic unit tests also exercise the same four outcomes at smaller byte thresholds so normal test runs do not need multi-megabyte committed fixture PDFs. Current local result: `4 passed`.
 
 ## T01 notes
 

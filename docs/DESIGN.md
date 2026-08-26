@@ -14,6 +14,7 @@ The primary use case is not general PDF optimization. It is a recovery path for 
 - Stop once the target is met instead of minimizing output size further.
 - Keep routing and compression decisions automatic for normal users.
 - Record enough processing metadata to make results explainable and reproducible.
+- Fail closed instead of guessing a destructive route when evidence is weak.
 
 ## Non-goals for the current PoC
 
@@ -42,6 +43,21 @@ input PDF
         |
         +-- unclassified ---------------> do not guess; report unsupported/needs review
 ```
+
+## Diagnosis PoC
+
+The current classifier uses encoded PDF stream sizes as a first structural signal:
+
+- `image-heavy` when encoded image streams account for at least 60% of the PDF file size,
+- abnormal-vector candidate when page/form content streams account for at least 35% and the image-heavy condition is not met,
+- `skip` when the file is already at or below the configured byte target,
+- otherwise `unclassified`.
+
+For abnormal-vector candidates, PDFium scans all pages at low resolution. Non-white sampled pixels whose RGB channel spread is at least 18 are counted as colored. The classifier uses the maximum per-page colored fraction rather than a document-wide average so a color-only middle page is not hidden by many monochrome pages. A current experimental threshold of 1% colored non-white pixels separates `vector-color` from `vector-monochrome`.
+
+These values are **PoC heuristics, not product guarantees**. They are intentionally function parameters so future corpus testing can change them without rewriting the routing model.
+
+The encoded-stream measurement currently isolates one pypdf private implementation detail (`StreamObject._data`) behind a helper because pypdf does not expose a stable public API for raw encoded stream length. If that private storage detail is unavailable, the helper falls back to pypdf stream serialization instead of relying on `/Length`, which parsed stream objects may not retain. This remains an explicit technical-debt item to revisit during PDF-reader/writer selection.
 
 ## Route A: image-heavy PDFs
 

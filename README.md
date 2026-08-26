@@ -17,11 +17,28 @@ The initial target is **single-file, offline processing**. The project is not in
 
 Three compression routes are under investigation:
 
-1. **Image-heavy PDFs** — recompress image XObjects while preserving text/vector content where possible.
-2. **Abnormally heavy monochrome vector/outline PDFs** — rasterize and encode as 1-bit CCITT Group 4.
-3. **Abnormally heavy color vector/outline PDFs** — rasterize and encode as JPEG, searching for the highest-quality settings that satisfy the target size.
+1. **Image-heavy PDFs** - recompress image XObjects while preserving text/vector content where possible.
+2. **Abnormally heavy monochrome vector/outline PDFs** - rasterize and encode as 1-bit CCITT Group 4.
+3. **Abnormally heavy color vector/outline PDFs** - rasterize and encode as JPEG, searching for the highest-quality settings that satisfy the target size.
 
 The preferred behavior is to make no change when a PDF is already below the configured threshold.
+
+## Diagnosis PoC
+
+The current branch contains a first automatic routing classifier. It does **not** compress the PDF yet; it reports the proposed route and the evidence used to choose it.
+
+```powershell
+python -m pip install -e ".[dev]"
+pdf-size-fit-diagnose .\sample.pdf
+```
+
+Use an explicit byte target when testing a receiving system:
+
+```powershell
+pdf-size-fit-diagnose .\sample.pdf --target-bytes 10000000 --json
+```
+
+Current route names are `skip`, `image-heavy`, `vector-monochrome`, `vector-color`, and `unclassified`. The classifier intentionally fails closed to `unclassified` when the current heuristics do not justify a destructive route.
 
 ## Project stage
 
