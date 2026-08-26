@@ -64,16 +64,18 @@ The encoded-stream measurement currently isolates one pypdf private implementati
 Current PoC design:
 
 1. Require the structural classifier to return `image-heavy`.
-2. Clone the original PDF instead of rebuilding pages.
-3. Visit unique image XObjects and replace only supported images using pypdf's public `ImageFile.replace()` API.
-4. Preserve a compatible existing `/SMask` after replacement.
-5. Start with JPEG quality 100 and no pixel downsampling.
-6. If the target is not met, probe quality downward in coarse steps and refine the first successful interval one quality point at a time.
-7. Rebuild each candidate from the original input, never from a previous lossy candidate.
-8. Verify page count, media boxes, rotation, and final byte target before copying a candidate to the requested output.
-9. Do not overwrite the source or an existing destination.
+2. Reject PDFs containing signature fields or certification-permissions structures before rewriting.
+3. Clone the original PDF instead of rebuilding pages.
+4. Visit unique image XObjects and replace only supported images using pypdf's public `ImageFile.replace()` API.
+5. Because `ImageFile.replace()` replaces the image stream dictionary, explicitly preserve supported non-pixel semantics such as `/SMask`, `/Interpolate`, `/Intent`, `/StructParent`, `/Metadata`, and `/OC`.
+6. Fail closed if an image has rendering semantics that are explicitly unsupported (`/Decode`, `/Mask`, `/ImageMask`, `/SMaskInData`) or an unknown dictionary key that the PoC cannot prove safe to discard.
+7. Start with JPEG quality 100 and no pixel downsampling.
+8. If the target is not met, probe quality downward in coarse steps and refine the first successful interval one quality point at a time.
+9. Rebuild each candidate from the original input, never from a previous lossy candidate.
+10. Verify page count, media boxes, rotation, and final byte target before copying a candidate to the requested output.
+11. Do not overwrite the source or an existing destination.
 
-The current conservative supported set is intentionally narrow: 8-bit `/DeviceRGB` and `/DeviceGray` image XObjects, optionally with a dimension-matching soft mask. Images with color-key `/Mask`, custom `/Decode`, unsupported color spaces/bit depths, or undecodable content fail closed.
+The current conservative supported set is intentionally narrow: 8-bit `/DeviceRGB` and `/DeviceGray` image XObjects, optionally with a dimension-matching soft mask. The route fails closed on unsupported color spaces/bit depths, masks/decoding semantics, unknown image dictionary semantics, or signed/certified PDFs.
 
 The route currently searches JPEG quality only. Resolution reduction is deferred until additional structure/quality validation is complete.
 
@@ -120,9 +122,9 @@ Before a result is accepted, the PoC should eventually verify at least:
 - processing route and parameters are recorded,
 - failed processing does not replace or masquerade as a valid result.
 
-The image-route PoC currently automates the first five of these for its accepted outputs and records quality/attempt metrics in its result object.
+The image-route PoC currently automates the first five of these for accepted outputs, records quality/attempt metrics, rejects signed/certified PDFs, and fails closed when image semantics fall outside its current preservation policy.
 
-Later testing should cover links, bookmarks, forms, annotations, signatures, embedded files, PDF/A expectations, shared image resources, Form XObject nesting, and other features before claiming broad compatibility.
+Later testing should cover bookmarks, forms, embedded files, PDF/A expectations, shared image resources, Form XObject nesting, optional content, unusual color spaces, and other features before claiming broad compatibility.
 
 ## Public test data policy
 
