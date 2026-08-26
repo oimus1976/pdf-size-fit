@@ -19,13 +19,13 @@ Three compression routes are under investigation:
 
 1. **Image-heavy PDFs** - recompress image XObjects while preserving text/vector content where possible.
 2. **Abnormally heavy monochrome vector/outline PDFs** - rasterize and encode as 1-bit CCITT Group 4.
-3. **Abnormally heavy color vector/outline PDFs** - rasterize and encode as JPEG, searching for the highest-quality settings that satisfy the target size.
+3. **Abnormally heavy color vector/outline PDFs** - rasterize and encode as JPEG, searching for the highest-quality settings that satisfies the target size.
 
 The preferred behavior is to make no change when a PDF is already below the configured threshold.
 
 ## Diagnosis PoC
 
-The current branch contains a first automatic routing classifier. It does **not** compress the PDF yet; it reports the proposed route and the evidence used to choose it.
+The automatic routing classifier reports the proposed route and evidence before compression is attempted.
 
 ```powershell
 python -m pip install -e ".[dev]"
@@ -39,6 +39,26 @@ pdf-size-fit-diagnose .\sample.pdf --target-bytes 10000000 --json
 ```
 
 Current route names are `skip`, `image-heavy`, `vector-monochrome`, `vector-color`, and `unclassified`. The classifier intentionally fails closed to `unclassified` when the current heuristics do not justify a destructive route.
+
+## Image-heavy fitting PoC
+
+The current image-route branch can clone the original PDF structure, recompress unique image XObjects through pypdf's public image replacement API, and search from high JPEG quality downward until the byte target is met.
+
+```powershell
+pdf-size-fit-image .\oversize.pdf .\oversize-fit.pdf --target-bytes 10000000
+```
+
+The PoC currently:
+
+- starts at JPEG quality 100,
+- rebuilds every trial from the original PDF rather than repeatedly recompressing a lossy intermediate,
+- refines between coarse quality probes to select the highest tested quality that meets the target,
+- preserves a compatible existing `/SMask` when replacing an image,
+- verifies page count, page boxes, and rotation before accepting output,
+- refuses unsupported image structures rather than silently flattening them,
+- never overwrites the input or a pre-existing output file.
+
+This is still narrow PoC coverage, not a broad PDF compatibility claim.
 
 ## Project stage
 
