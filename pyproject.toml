@@ -21,6 +21,7 @@ dev = [
 
 [project.scripts]
 pdf-size-fit-diagnose = "pdf_size_fit.cli:main"
+pdf-size-fit-image = "pdf_size_fit.image_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
