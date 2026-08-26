@@ -14,7 +14,7 @@ The project is validating whether oversized PDFs can be automatically classified
 
 A real-world 11-page sample was 10,478,354 bytes and consisted almost entirely of page-sized raster images.
 
-Two PoCs have now crossed the nominal 10,000,000-byte threshold without reducing image pixel dimensions:
+Two PoCs have crossed the nominal 10,000,000-byte threshold without reducing image pixel dimensions:
 
 - an earlier page-reconstruction experiment produced 8,767,488 bytes at JPEG quality 100,
 - the structure-preserving image-XObject replacement PoC produced 7,573,276 bytes at JPEG quality 100 while retaining compatible existing soft masks.
@@ -49,16 +49,18 @@ A merge-blocking review found that the original color detector sampled only the 
 The first route-specific execution PoC now:
 
 - requires an `image-heavy` diagnosis before it runs,
+- rejects PDFs containing signature fields or certification-permissions structures because rewriting may invalidate signatures,
 - clones the original PDF with pypdf,
 - replaces each unique supported image XObject through pypdf's public `ImageFile.replace()` API,
-- preserves a compatible existing `/SMask`,
+- explicitly restores supported image dictionary semantics that `ImageFile.replace()` would otherwise discard, including `/SMask`, `/Interpolate`, `/Intent`, `/StructParent`, `/Metadata`, and `/OC`,
+- fails closed on explicitly unsupported or unknown image dictionary semantics,
 - starts at JPEG quality 100 and searches downward only when necessary,
 - rebuilds every trial from the original input so lossy recompression does not accumulate,
 - verifies page count, page boxes, rotation, and final byte size before accepting output,
 - refuses to overwrite either the source or a pre-existing destination,
 - fails closed on unsupported image structures.
 
-Synthetic automated coverage is currently `12 passed` in the local PoC environment. The real-world image-heavy sample was also run through this implementation: 10,478,354 -> 7,573,276 bytes at JPEG quality 100. A PDFium full-document render comparison at scale 1 showed page-wise MAE <= about 0.098, maximum channel difference 4, and PSNR >= about 56.9 dB for that sample. These measurements describe that sample only, not a general visual-quality guarantee.
+After adversarial review, synthetic automated coverage is `14 passed` in the local review environment, including signed-PDF rejection and preservation of supported image dictionary semantics. The real-world image-heavy sample was also run through this implementation: 10,478,354 -> 7,573,276 bytes at JPEG quality 100. A PDFium full-document render comparison at scale 1 showed page-wise MAE <= about 0.098, maximum channel difference 4, and PSNR >= about 56.9 dB for that sample. These measurements describe that sample only, not a general visual-quality guarantee.
 
 ## Current design direction
 
@@ -71,16 +73,18 @@ Synthetic automated coverage is currently `12 passed` in the local PoC environme
 - Fail closed when routing evidence is insufficient.
 - Bias color detection toward false-color rather than false-monochrome results because the latter could destroy information during 1-bit conversion.
 - For image-heavy PDFs, preserve the original PDF structure and replace supported image XObjects rather than reconstructing pages.
+- Treat pypdf image replacement as a dictionary replacement operation: explicitly preserve known semantics and reject unknown/unsafe semantics.
+- Refuse to rewrite signed/certified PDFs in the current PoC.
 
 ## Next milestone
 
-Review the image-XObject execution PoC against additional structures before treating the route as MVP-ready. Priority cases include:
+Continue reviewing the image-XObject execution PoC against additional structures before treating the route as MVP-ready. Priority cases include:
 
 1. shared image XObjects reused across pages/forms,
 2. images nested inside Form XObjects,
 3. additional valid color spaces and bit depths,
 4. masks/transparency combinations,
-5. bookmarks, links, annotations, metadata, forms, and signed PDFs,
+5. bookmarks, forms, embedded files, optional content, and PDF/A expectations,
 6. target-not-met behavior when JPEG quality alone is insufficient.
 
 Only after that review should the PoC consider adding image downsampling as a second-stage size search.
@@ -92,7 +96,7 @@ Only after that review should the PoC consider adding image downsampling as a se
 - Packaging / installer method
 - GUI framework
 - Exact safety margin below a nominal 10 MB limit
-- Support policy for signed PDFs, forms, attachments, PDF/A, annotations, or other special features
+- Support policy for forms, attachments, PDF/A, annotations, or other special features
 - Final routing thresholds and confidence policy
 - Whether the private pypdf raw-stream access should be removed before or during writer-stack selection
 - Whether and how the image route should support downsampling after JPEG-quality search is exhausted
