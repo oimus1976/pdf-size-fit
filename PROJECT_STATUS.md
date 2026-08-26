@@ -12,7 +12,14 @@ The project is validating whether oversized PDFs can be automatically classified
 
 ### 1. Image-heavy PDF
 
-A real-world 11-page sample was 10,478,354 bytes and consisted almost entirely of page-sized raster images. Re-encoding the images as JPEG at quality 100, without reducing pixel dimensions, produced 8,767,488 bytes.
+A real-world 11-page sample was 10,478,354 bytes and consisted almost entirely of page-sized raster images.
+
+Two PoCs have now crossed the nominal 10,000,000-byte threshold without reducing image pixel dimensions:
+
+- an earlier page-reconstruction experiment produced 8,767,488 bytes at JPEG quality 100,
+- the structure-preserving image-XObject replacement PoC produced 7,573,276 bytes at JPEG quality 100 while retaining compatible existing soft masks.
+
+The second result is now the preferred engineering direction because it clones the original PDF structure and changes supported image XObjects rather than rebuilding pages.
 
 ### 2. Monochrome abnormal vector/outline PDF
 
@@ -24,7 +31,7 @@ A synthetic 12-page fixture containing no embedded images and no extractable tex
 
 ## Automatic diagnosis/routing PoC
 
-The first classifier distinguishes the intended MVP outcomes and reports reasons before any compression is attempted.
+The classifier distinguishes the intended MVP outcomes and reports reasons before any compression is attempted.
 
 Validated against the current representative samples with a 10,000,000-byte target:
 
@@ -35,9 +42,23 @@ Validated against the current representative samples with a 10,000,000-byte targ
 
 The classifier also provides `unclassified` and does not guess a destructive route when no current threshold is met.
 
-A merge-blocking review found that the original color detector sampled only the first pages plus the last page, which could misclassify a PDF whose only color content appeared on an unsampled middle page. The branch now scans every page at low resolution and uses the maximum per-page color fraction, deliberately biasing toward preserving color. A regression test covers the middle-page case.
+A merge-blocking review found that the original color detector sampled only the first pages plus the last page, which could misclassify a PDF whose only color content appeared on an unsampled middle page. The implementation now scans every page at low resolution and uses the maximum per-page color fraction, deliberately biasing toward preserving color. A regression test covers the middle-page case.
 
-Current automated coverage includes `skip`, all three routed classes, fail-closed `unclassified`, middle-page color detection, and invalid target rejection. CI is configured for Python 3.11 and 3.12.
+## Image-heavy compression execution PoC
+
+The first route-specific execution PoC now:
+
+- requires an `image-heavy` diagnosis before it runs,
+- clones the original PDF with pypdf,
+- replaces each unique supported image XObject through pypdf's public `ImageFile.replace()` API,
+- preserves a compatible existing `/SMask`,
+- starts at JPEG quality 100 and searches downward only when necessary,
+- rebuilds every trial from the original input so lossy recompression does not accumulate,
+- verifies page count, page boxes, rotation, and final byte size before accepting output,
+- refuses to overwrite either the source or a pre-existing destination,
+- fails closed on unsupported image structures.
+
+Synthetic automated coverage is currently `12 passed` in the local PoC environment. The real-world image-heavy sample was also run through this implementation: 10,478,354 -> 7,573,276 bytes at JPEG quality 100. A PDFium full-document render comparison at scale 1 showed page-wise MAE <= about 0.098, maximum channel difference 4, and PSNR >= about 56.9 dB for that sample. These measurements describe that sample only, not a general visual-quality guarantee.
 
 ## Current design direction
 
@@ -49,12 +70,20 @@ Current automated coverage includes `skip`, all three routed classes, fail-close
 - Keep processing offline with no runtime downloads or required network access.
 - Fail closed when routing evidence is insufficient.
 - Bias color detection toward false-color rather than false-monochrome results because the latter could destroy information during 1-bit conversion.
+- For image-heavy PDFs, preserve the original PDF structure and replace supported image XObjects rather than reconstructing pages.
 
 ## Next milestone
 
-Connect the diagnosis result to **route-specific compression execution and target-size search**, starting with the image-heavy route because it can potentially preserve text/vector structures while changing only the dominant image streams.
+Review the image-XObject execution PoC against additional structures before treating the route as MVP-ready. Priority cases include:
 
-Before that route is treated as safe enough for the MVP, verify how image-XObject replacement interacts with shared images, masks, transparency, color spaces, and page/form resource reuse.
+1. shared image XObjects reused across pages/forms,
+2. images nested inside Form XObjects,
+3. additional valid color spaces and bit depths,
+4. masks/transparency combinations,
+5. bookmarks, links, annotations, metadata, forms, and signed PDFs,
+6. target-not-met behavior when JPEG quality alone is insufficient.
+
+Only after that review should the PoC consider adding image downsampling as a second-stage size search.
 
 ## Not decided yet
 
@@ -64,6 +93,6 @@ Before that route is treated as safe enough for the MVP, verify how image-XObjec
 - GUI framework
 - Exact safety margin below a nominal 10 MB limit
 - Support policy for signed PDFs, forms, attachments, PDF/A, annotations, or other special features
-- Whether image XObjects can always be replaced safely enough for the MVP
 - Final routing thresholds and confidence policy
 - Whether the private pypdf raw-stream access should be removed before or during writer-stack selection
+- Whether and how the image route should support downsampling after JPEG-quality search is exhausted
