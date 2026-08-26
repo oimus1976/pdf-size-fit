@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-08-26
+Last updated: 2026-08-27
 
 ## Current phase
 
@@ -24,9 +24,9 @@ A synthetic 12-page fixture containing no embedded images and no extractable tex
 
 ## Automatic diagnosis/routing PoC
 
-The first classifier now distinguishes the intended MVP outcomes and reports reasons before any compression is attempted.
+The first classifier distinguishes the intended MVP outcomes and reports reasons before any compression is attempted.
 
-Validated against the current samples with a 10,000,000-byte target:
+Validated against the current representative samples with a 10,000,000-byte target:
 
 - image-heavy real-world sample -> `image-heavy` (encoded images about 99.8% of file size),
 - monochrome abnormal-vector real-world sample -> `vector-monochrome` (page/form streams about 99.9%, sampled colored pixels 0.0%),
@@ -35,7 +35,9 @@ Validated against the current samples with a 10,000,000-byte target:
 
 The classifier also provides `unclassified` and does not guess a destructive route when no current threshold is met.
 
-Local automated tests for the four routed outcomes currently pass: `4 passed`.
+A merge-blocking review found that the original color detector sampled only the first pages plus the last page, which could misclassify a PDF whose only color content appeared on an unsampled middle page. The branch now scans every page at low resolution and uses the maximum per-page color fraction, deliberately biasing toward preserving color. A regression test covers the middle-page case.
+
+Current automated coverage includes `skip`, all three routed classes, fail-closed `unclassified`, middle-page color detection, and invalid target rejection. CI is configured for Python 3.11 and 3.12.
 
 ## Current design direction
 
@@ -46,6 +48,7 @@ Local automated tests for the four routed outcomes currently pass: `4 passed`.
 - Preserve the original input unchanged.
 - Keep processing offline with no runtime downloads or required network access.
 - Fail closed when routing evidence is insufficient.
+- Bias color detection toward false-color rather than false-monochrome results because the latter could destroy information during 1-bit conversion.
 
 ## Next milestone
 
@@ -63,3 +66,4 @@ Before that route is treated as safe enough for the MVP, verify how image-XObjec
 - Support policy for signed PDFs, forms, attachments, PDF/A, annotations, or other special features
 - Whether image XObjects can always be replaced safely enough for the MVP
 - Final routing thresholds and confidence policy
+- Whether the private pypdf raw-stream access should be removed before or during writer-stack selection
