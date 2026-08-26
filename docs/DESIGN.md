@@ -61,14 +61,23 @@ The encoded-stream measurement currently isolates one pypdf private implementati
 
 ## Route A: image-heavy PDFs
 
-Working hypothesis:
+Current PoC design:
 
-- Estimate how much of the file is attributable to image XObjects.
-- If images dominate, preserve text/vector structures and recompress only images where safe.
-- Start with the highest-quality candidate.
-- Lower JPEG quality and/or image resolution only as needed to meet the target.
+1. Require the structural classifier to return `image-heavy`.
+2. Clone the original PDF instead of rebuilding pages.
+3. Visit unique image XObjects and replace only supported images using pypdf's public `ImageFile.replace()` API.
+4. Preserve a compatible existing `/SMask` after replacement.
+5. Start with JPEG quality 100 and no pixel downsampling.
+6. If the target is not met, probe quality downward in coarse steps and refine the first successful interval one quality point at a time.
+7. Rebuild each candidate from the original input, never from a previous lossy candidate.
+8. Verify page count, media boxes, rotation, and final byte target before copying a candidate to the requested output.
+9. Do not overwrite the source or an existing destination.
 
-A real-world image-per-page sample crossed the threshold using JPEG quality 100 without reducing pixel dimensions.
+The current conservative supported set is intentionally narrow: 8-bit `/DeviceRGB` and `/DeviceGray` image XObjects, optionally with a dimension-matching soft mask. Images with color-key `/Mask`, custom `/Decode`, unsupported color spaces/bit depths, or undecodable content fail closed.
+
+The route currently searches JPEG quality only. Resolution reduction is deferred until additional structure/quality validation is complete.
+
+A real-world image-heavy sample reached the 10,000,000-byte target at quality 100 without downsampling. The structure-preserving implementation produced 7,573,276 bytes from a 10,478,354-byte input.
 
 ## Route B: monochrome abnormal vector/outline PDFs
 
@@ -111,7 +120,9 @@ Before a result is accepted, the PoC should eventually verify at least:
 - processing route and parameters are recorded,
 - failed processing does not replace or masquerade as a valid result.
 
-Later testing should cover links, bookmarks, forms, annotations, signatures, embedded files, PDF/A expectations, and other features before claiming broad compatibility.
+The image-route PoC currently automates the first five of these for its accepted outputs and records quality/attempt metrics in its result object.
+
+Later testing should cover links, bookmarks, forms, annotations, signatures, embedded files, PDF/A expectations, shared image resources, Form XObject nesting, and other features before claiming broad compatibility.
 
 ## Public test data policy
 
