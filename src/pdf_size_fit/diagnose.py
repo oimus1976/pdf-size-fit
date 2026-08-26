@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from enum import Enum
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -57,11 +58,23 @@ def _raw_stream_size(stream: StreamObject) -> int:
     raw = getattr(stream, "_data", None)
     if isinstance(raw, (bytes, bytearray)):
         return len(raw)
-    length = stream.get("/Length")
+
+    # pypdf removes /Length from parsed StreamObject dictionaries, so /Length is
+    # not a reliable fallback here. Use the documented serialization method if
+    # the private storage detail is unavailable.
+    buffer = BytesIO()
     try:
-        return int(length)
-    except (TypeError, ValueError):
+        stream.write_to_stream(buffer)
+    except Exception:
         return 0
+
+    serialized = buffer.getvalue()
+    marker = b"\nstream\n"
+    suffix = b"\nendstream"
+    start = serialized.find(marker)
+    if start < 0 or not serialized.endswith(suffix):
+        return 0
+    return len(serialized) - (start + len(marker)) - len(suffix)
 
 
 def _iter_streams(value: Any) -> Iterable[tuple[Any, StreamObject]]:
@@ -112,24 +125,27 @@ def _collect_xobjects(resources: Any, seen: set[tuple[Any, ...]]) -> tuple[int, 
     return image_bytes, form_bytes
 
 
-def _rendered_color_fraction(path: Path, sample_pages: int = 3, dpi: int = 36) -> float:
+def _rendered_color_fraction(path: Path, dpi: int = 36) -> float:
+    """Return the maximum per-page fraction of sampled non-white pixels with material chroma.
+
+    All pages are scanned at low resolution. This intentionally biases classification
+    toward the color route: a false color classification preserves color, while a false
+    monochrome classification could destroy it during a later 1-bit conversion.
+    """
     import pypdfium2 as pdfium
 
     pdf = pdfium.PdfDocument(str(path))
-    colored = 0
-    considered = 0
+    max_page_fraction = 0.0
     try:
-        page_indexes = list(range(min(sample_pages, len(pdf))))
-        if len(pdf) > sample_pages:
-            page_indexes[-1] = len(pdf) - 1
-
-        for page_index in page_indexes:
+        for page_index in range(len(pdf)):
             page = pdf[page_index]
             try:
                 image = page.render(scale=dpi / 72.0).to_pil().convert("RGB")
                 pixels = image.load()
                 width, height = image.size
                 step = max(1, min(width, height) // 120)
+                colored = 0
+                considered = 0
                 for y in range(0, height, step):
                     for x in range(0, width, step):
                         r, g, b = pixels[x, y]
@@ -138,12 +154,14 @@ def _rendered_color_fraction(path: Path, sample_pages: int = 3, dpi: int = 36) -
                         considered += 1
                         if max(r, g, b) - min(r, g, b) >= 18:
                             colored += 1
+                page_fraction = (colored / considered) if considered else 0.0
+                max_page_fraction = max(max_page_fraction, page_fraction)
             finally:
                 page.close()
     finally:
         pdf.close()
 
-    return (colored / considered) if considered else 0.0
+    return max_page_fraction
 
 
 def diagnose_pdf(
@@ -154,6 +172,16 @@ def diagnose_pdf(
     vector_heavy_ratio: float = 0.35,
     color_fraction_threshold: float = 0.01,
 ) -> Diagnosis:
+    if target_bytes <= 0:
+        raise ValueError("target_bytes must be greater than zero")
+    for name, value in (
+        ("image_heavy_ratio", image_heavy_ratio),
+        ("vector_heavy_ratio", vector_heavy_ratio),
+        ("color_fraction_threshold", color_fraction_threshold),
+    ):
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be between 0.0 and 1.0")
+
     path = Path(path)
     file_size = path.stat().st_size
     reader = PdfReader(str(path))
@@ -203,10 +231,16 @@ def diagnose_pdf(
         color_fraction = _rendered_color_fraction(path)
         if color_fraction >= color_fraction_threshold:
             route = Route.VECTOR_COLOR
-            color_reason = f"sampled rendered non-white pixels show material color use ({color_fraction:.1%})"
+            color_reason = (
+                "at least one rendered page shows material color use "
+                f"(maximum sampled page fraction {color_fraction:.1%})"
+            )
         else:
             route = Route.VECTOR_MONOCHROME
-            color_reason = f"sampled rendered non-white pixels are effectively monochrome ({color_fraction:.1%} colored)"
+            color_reason = (
+                "all rendered pages are effectively monochrome at the current sampling threshold "
+                f"(maximum sampled page fraction {color_fraction:.1%} colored)"
+            )
 
         return Diagnosis(
             path=str(path), file_size_bytes=file_size, target_bytes=target_bytes,
