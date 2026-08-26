@@ -4,7 +4,8 @@ import hashlib
 from pathlib import Path
 
 from PIL import Image
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import ArrayObject, BooleanObject, DictionaryObject, NameObject, NumberObject
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -101,3 +102,45 @@ def test_fit_fails_closed_on_route_mismatch(tmp_path: Path) -> None:
 
     assert result.status is ImageFitStatus.ROUTE_MISMATCH
     assert not output.exists()
+
+
+def test_fit_refuses_signature_field_pdf(tmp_path: Path) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "signed-structure.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    generate_image_heavy(base, pages=1, image_size=300)
+
+    writer = PdfWriter(clone_from=str(base))
+    signature_field = DictionaryObject({NameObject("/FT"): NameObject("/Sig")})
+    writer.root_object[NameObject("/AcroForm")] = DictionaryObject(
+        {NameObject("/Fields"): ArrayObject([signature_field])}
+    )
+    with source.open("wb") as f:
+        writer.write(f)
+
+    result = fit_image_heavy_pdf(source, output, target_bytes=100_000, min_quality=70)
+
+    assert result.status is ImageFitStatus.SIGNED_PDF_UNSUPPORTED
+    assert not output.exists()
+
+
+def test_fit_preserves_supported_image_dictionary_semantics(tmp_path: Path) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "output.pdf"
+    generate_image_heavy(base, pages=1, image_size=300)
+
+    writer = PdfWriter(clone_from=str(base))
+    image = writer.pages[0].images[0]
+    obj = image.indirect_reference.get_object()
+    obj[NameObject("/Interpolate")] = BooleanObject(True)
+    obj[NameObject("/StructParent")] = NumberObject(7)
+    with source.open("wb") as f:
+        writer.write(f)
+
+    result = fit_image_heavy_pdf(source, output, target_bytes=170_000, min_quality=70)
+
+    assert result.status is ImageFitStatus.FITTED
+    out_obj = PdfReader(str(output)).pages[0].images[0].indirect_reference.get_object()
+    assert out_obj["/Interpolate"] == BooleanObject(True)
+    assert int(out_obj["/StructParent"]) == 7
