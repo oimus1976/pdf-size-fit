@@ -128,6 +128,24 @@ def test_target_not_met_remains_fail_closed_at_minimum_scale(tmp_path: Path) -> 
     assert not output.exists()
 
 
+def test_subpercent_minimum_scale_is_not_rounded_below_the_floor(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    generate_image_heavy(source, pages=1, image_size=300)
+
+    result = fit_image_heavy_pdf(
+        source,
+        output,
+        target_bytes=1_000,
+        min_quality=70,
+        min_scale=0.999,
+    )
+
+    assert result.status is ImageFitStatus.TARGET_NOT_MET
+    assert all(attempt.scale == 1.0 for attempt in result.attempts)
+    assert not output.exists()
+
+
 def test_min_scale_validation(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "output.pdf"
