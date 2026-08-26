@@ -29,6 +29,8 @@ The project is currently experimental and does not yet use formal releases.
 - Quality search that starts at JPEG quality 100, probes downward, and refines the first successful interval without cumulative recompression.
 - Tests for image-route fitting, source immutability, compatible soft-mask preservation, annotation/metadata retention, skip behavior, and route-mismatch fail-closed behavior.
 - Regression tests that reject PDFs containing signature fields and verify preservation of supported image dictionary semantics such as `/Interpolate` and `/StructParent`.
+- Structure-coverage tests for shared image XObjects nested in reusable Form XObjects, bookmark preservation, AcroForm field preservation, and embedded-file preservation.
+- PDF/A identification-metadata detection for the image route; matching PDFs return `pdf-a-unsupported` without writing output.
 
 ### Changed
 
@@ -37,10 +39,12 @@ The project is currently experimental and does not yet use formal releases.
 - The image-heavy route now preserves the original PDF object/page structure and replaces only supported image XObjects instead of reconstructing each page in a new PDF.
 - Image replacement now preserves a defined set of rendering/structure dictionary entries and fails closed when unknown or explicitly unsupported image dictionary semantics would otherwise be discarded.
 - PDFs containing signature fields or certification-permissions structures are rejected by the image execution PoC because a full rewrite may invalidate signatures.
+- Standard PDF/A XMP identification markers are now treated as a fail-closed boundary until post-rewrite PDF/A conformance can be validated.
+- Restored the repository-level `*.pdf` ignore guard so real/private PDFs are not accidentally staged; only explicitly whitelisted synthetic fixtures under `tests/fixtures/` may be tracked.
 
 ### Notes
 
 - No application license has been selected yet.
 - No production compression engine, GUI, installer, or release artifact exists yet.
 - Real municipal source documents used for local validation are intentionally excluded from the repository.
-- Image replacement remains deliberately conservative: unsupported masks, color spaces, bit depths, decoding structures, unknown image dictionary semantics, or signed/certified PDFs return a fail-closed result rather than being rewritten silently.
+- Image replacement remains deliberately conservative: unsupported masks, color spaces, bit depths, decoding structures, unknown image dictionary semantics, signed/certified PDFs, or PDF/A-identified PDFs return a fail-closed result rather than being rewritten silently.

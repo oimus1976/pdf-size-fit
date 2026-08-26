@@ -65,17 +65,23 @@ Current PoC design:
 
 1. Require the structural classifier to return `image-heavy`.
 2. Reject PDFs containing signature fields or certification-permissions structures before rewriting.
-3. Clone the original PDF instead of rebuilding pages.
-4. Visit unique image XObjects and replace only supported images using pypdf's public `ImageFile.replace()` API.
-5. Because `ImageFile.replace()` replaces the image stream dictionary, explicitly preserve supported non-pixel semantics such as `/SMask`, `/Interpolate`, `/Intent`, `/StructParent`, `/Metadata`, and `/OC`.
-6. Fail closed if an image has rendering semantics that are explicitly unsupported (`/Decode`, `/Mask`, `/ImageMask`, `/SMaskInData`) or an unknown dictionary key that the PoC cannot prove safe to discard.
-7. Start with JPEG quality 100 and no pixel downsampling.
-8. If the target is not met, probe quality downward in coarse steps and refine the first successful interval one quality point at a time.
-9. Rebuild each candidate from the original input, never from a previous lossy candidate.
-10. Verify page count, media boxes, rotation, and final byte target before copying a candidate to the requested output.
-11. Do not overwrite the source or an existing destination.
+3. Reject PDFs carrying standard PDF/A XMP identification metadata until the project can verify PDF/A conformance after rewriting.
+4. Clone the original PDF instead of rebuilding pages.
+5. Visit unique image XObjects, including images nested inside Form XObjects, and replace only supported images using pypdf's public `ImageFile.replace()` API.
+6. Deduplicate by indirect object reference so a shared image reused across pages/forms is recompressed once and remains shared.
+7. Because `ImageFile.replace()` replaces the image stream dictionary, explicitly preserve supported non-pixel semantics such as `/SMask`, `/Interpolate`, `/Intent`, `/StructParent`, `/Metadata`, and `/OC`.
+8. Fail closed if an image has rendering semantics that are explicitly unsupported (`/Decode`, `/Mask`, `/ImageMask`, `/SMaskInData`) or an unknown dictionary key that the PoC cannot prove safe to discard.
+9. Start with JPEG quality 100 and no pixel downsampling.
+10. If the target is not met, probe quality downward in coarse steps and refine the first successful interval one quality point at a time.
+11. Rebuild each candidate from the original input, never from a previous lossy candidate.
+12. Verify page count, media boxes, rotation, and final byte target before copying a candidate to the requested output.
+13. Do not overwrite the source or an existing destination.
 
-The current conservative supported set is intentionally narrow: 8-bit `/DeviceRGB` and `/DeviceGray` image XObjects, optionally with a dimension-matching soft mask. The route fails closed on unsupported color spaces/bit depths, masks/decoding semantics, unknown image dictionary semantics, or signed/certified PDFs.
+The current conservative supported image set is intentionally narrow: 8-bit `/DeviceRGB` and `/DeviceGray` image XObjects, optionally with a dimension-matching soft mask. The route fails closed on unsupported color spaces/bit depths, masks/decoding semantics, unknown image dictionary semantics, signed/certified PDFs, or PDF/A-identified PDFs.
+
+Synthetic structure coverage now confirms that the current clone-and-replace approach can preserve a shared image nested in a reusable Form XObject, bookmarks, an AcroForm text field/value, and an embedded file in the tested fixtures. These are regression checks, not broad guarantees for every variant of those features.
+
+The PDF/A check is intentionally conservative and limited: it looks for standard PDF/A identification markers in the document metadata. A positive marker blocks rewriting. Absence of a marker is not a general proof that a PDF is not archival/conformance-sensitive.
 
 The route currently searches JPEG quality only. Resolution reduction is deferred until additional structure/quality validation is complete.
 
@@ -122,9 +128,9 @@ Before a result is accepted, the PoC should eventually verify at least:
 - processing route and parameters are recorded,
 - failed processing does not replace or masquerade as a valid result.
 
-The image-route PoC currently automates the first five of these for accepted outputs, records quality/attempt metrics, rejects signed/certified PDFs, and fails closed when image semantics fall outside its current preservation policy.
+The image-route PoC currently automates the first five of these for accepted outputs, records quality/attempt metrics, rejects signed/certified and PDF/A-identified PDFs, and fails closed when image semantics fall outside its current preservation policy.
 
-Later testing should cover bookmarks, forms, embedded files, PDF/A expectations, shared image resources, Form XObject nesting, optional content, unusual color spaces, and other features before claiming broad compatibility.
+Remaining high-priority coverage includes additional color spaces/bit depths, color-key masks and transparency variants, optional-content combinations, rotated/mixed-size pages, very long files, and the JPEG-quality-exhausted path before adding downsampling.
 
 ## Public test data policy
 

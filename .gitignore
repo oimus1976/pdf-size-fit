@@ -1,8 +1,19 @@
+# Keep real/private PDFs out of source control by default.
+*.pdf
+
+# Synthetic, redistributable fixtures may be explicitly kept here.
+!tests/fixtures/*.pdf
+
+.venv/
+venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.venv/
-dist/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 build/
+dist/
 *.egg-info/
 fixtures-generated/

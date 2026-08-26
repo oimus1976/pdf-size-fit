@@ -144,3 +144,94 @@ def test_fit_preserves_supported_image_dictionary_semantics(tmp_path: Path) -> N
     out_obj = PdfReader(str(output)).pages[0].images[0].indirect_reference.get_object()
     assert out_obj["/Interpolate"] == BooleanObject(True)
     assert int(out_obj["/StructParent"]) == 7
+
+
+def _noise_image(size: int) -> Image.Image:
+    image = Image.new("RGB", (size, size))
+    pixels = image.load()
+    for y in range(size):
+        for x in range(size):
+            z = (x * 2654435761 + y * 2246822519) & 0xFFFFFFFF
+            pixels[x, y] = ((z >> 16) & 255, (z >> 8) & 255, z & 255)
+    return image
+
+
+def test_fit_preserves_shared_form_image_reference(tmp_path: Path) -> None:
+    source = tmp_path / "shared-form.pdf"
+    output = tmp_path / "shared-form-fit.pdf"
+    image = _noise_image(250)
+
+    c = canvas.Canvas(str(source), pagesize=A4, pageCompression=1)
+    c.beginForm("SharedForm", 0, 0, A4[0], A4[1])
+    c.drawImage(ImageReader(image), 0, 0, width=A4[0], height=A4[1])
+    c.endForm()
+    for _ in range(2):
+        c.doForm("SharedForm")
+        c.showPage()
+    c.save()
+
+    source_reader = PdfReader(str(source))
+    source_refs = [page.images[0].indirect_reference.idnum for page in source_reader.pages]
+    assert source_refs[0] == source_refs[1]
+
+    result = fit_image_heavy_pdf(source, output, target_bytes=140_000, min_quality=70)
+
+    assert result.status is ImageFitStatus.FITTED
+    assert result.images_replaced == 1
+    output_reader = PdfReader(str(output))
+    output_refs = [page.images[0].indirect_reference.idnum for page in output_reader.pages]
+    assert output_refs[0] == output_refs[1]
+    assert all(len(page.images.keys()[0]) == 2 for page in output_reader.pages)
+
+
+def test_fit_preserves_bookmark_form_and_attachment(tmp_path: Path) -> None:
+    base = tmp_path / "base-structure.pdf"
+    source = tmp_path / "structure.pdf"
+    output = tmp_path / "structure-fit.pdf"
+    image = _noise_image(250)
+
+    c = canvas.Canvas(str(base), pagesize=A4, pageCompression=1)
+    c.bookmarkPage("page-1")
+    c.addOutlineEntry("Page 1", "page-1", level=0)
+    c.drawImage(ImageReader(image), 0, 0, width=A4[0], height=A4[1])
+    c.acroForm.textfield(name="case_id", x=50, y=50, width=120, height=20, value="ABC")
+    c.save()
+
+    writer = PdfWriter(clone_from=str(base))
+    writer.add_attachment("note.txt", b"hello attachment")
+    with source.open("wb") as f:
+        writer.write(f)
+
+    result = fit_image_heavy_pdf(source, output, target_bytes=140_000, min_quality=70)
+
+    assert result.status is ImageFitStatus.FITTED
+    out_reader = PdfReader(str(output))
+    assert out_reader.outline[0]["/Title"] == "Page 1"
+    assert out_reader.get_fields()["case_id"]["/V"] == "ABC"
+    assert out_reader.attachments["note.txt"] == [b"hello attachment"]
+
+
+def test_fit_refuses_pdfa_identification_metadata(tmp_path: Path) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "pdfa-marked.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    generate_image_heavy(base, pages=1, image_size=250)
+
+    writer = PdfWriter(clone_from=str(base))
+    writer.xmp_metadata = b'''<?xpacket begin=""?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
+      <pdfaid:part>2</pdfaid:part>
+      <pdfaid:conformance>B</pdfaid:conformance>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>'''
+    with source.open("wb") as f:
+        writer.write(f)
+
+    result = fit_image_heavy_pdf(source, output, target_bytes=140_000, min_quality=70)
+
+    assert result.status is ImageFitStatus.PDF_A_UNSUPPORTED
+    assert not output.exists()
