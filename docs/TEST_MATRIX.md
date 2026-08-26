@@ -7,7 +7,8 @@ Real municipal documents are used only for local/private validation and must not
 | ID | Sample type | Source | Input | Experimental route | Output | Status / observation |
 |---|---|---|---:|---|---:|---|
 | T01 | Monochrome abnormal vector/outline | Private real-world sample | 23,375,987 bytes test input derived from the original large PDF | PDFium render -> 1-bit -> CCITT Group 4, 300 dpi | 2,215,863 bytes | Under target; 47 pages re-rendered successfully in PoC verification |
-| T02 | Image-heavy, approximately one full-page image per page | Private real-world sample | 10,478,354 bytes | Re-encode page images as JPEG quality 100; keep pixel dimensions | 8,767,488 bytes | Under target with small measured pixel differences in sampled pages |
+| T02a | Image-heavy, approximately one full-page image per page | Private real-world sample | 10,478,354 bytes | Earlier page-reconstruction experiment, JPEG quality 100 | 8,767,488 bytes | Under target; useful early proof but not preferred structure-preserving design |
+| T02b | Same image-heavy sample | Private real-world sample | 10,478,354 bytes | Clone PDF and replace supported image XObjects, JPEG quality 100, preserve compatible `/SMask` | 7,573,276 bytes | Under target; preferred image-route PoC direction |
 | T03 | Color abnormal vector/outline | Synthetic fixture | 17,327,349 bytes | PDFium render -> RGB JPEG, 200 dpi / quality 90 | 9,475,016 bytes | Under nominal 10,000,000-byte target |
 | T03b | Color abnormal vector/outline | Same synthetic fixture | 17,327,349 bytes | PDFium render -> RGB JPEG, 180 dpi / quality 92 | 9,159,915 bytes | Also under target; not yet selected as preferred search result |
 | T04 | Mixed image/text presentation PDF | Private real-world sample | 5,042,912 bytes | No processing | unchanged | Below target; automatic diagnosis returns `skip` |
@@ -24,7 +25,23 @@ The diagnosis PoC was run against the available representative samples with `tar
 | T03 color abnormal vector | `vector-color` | `vector-color` | images 0.0%; page/form streams about 100.0%; sampled colored pixels 93.9% |
 | T04 already-small presentation | `skip` | `skip` | 5,042,912 bytes <= 10,000,000-byte target |
 
-Synthetic unit tests also exercise the same four outcomes at smaller byte thresholds so normal test runs do not need multi-megabyte committed fixture PDFs. Current local result: `4 passed`.
+Synthetic unit tests exercise all diagnosis outcomes without committing multi-megabyte real-world files.
+
+## Image-route execution validation
+
+The image-XObject execution PoC adds synthetic tests for:
+
+- successful target fitting,
+- highest-quality refinement after a coarse quality probe crosses the target,
+- source-file immutability,
+- compatible `/SMask` preservation,
+- annotation and metadata retention in a synthetic sample,
+- no output when the file is already below target,
+- no output when diagnosis selects a different route.
+
+Current local suite result after adding these tests: `12 passed`.
+
+For T02b, the real-world image-heavy sample was also rendered with PDFium before and after the structure-preserving quality-100 replacement. Across all 11 pages at render scale 1, the observed page-wise maximum MAE was about 0.098, maximum channel difference was 4, and minimum PSNR was about 56.9 dB. These numbers are sample-specific evidence only.
 
 ## T01 notes
 
@@ -35,6 +52,8 @@ The document contained almost no embedded raster images; the size was dominated 
 ## T02 notes
 
 The 11-page input consisted almost entirely of raster image data. The image stream total accounted for more than 99% of the PDF size in the PoC diagnosis. This is the key counterexample to T01: the least destructive useful operation is image recompression, not whole-page rasterization.
+
+The current preferred PoC keeps the PDF page/object structure and replaces supported image XObjects only. It deliberately fails closed for unsupported image structures rather than flattening them silently.
 
 ## T03 notes
 
@@ -62,6 +81,10 @@ It exists to validate routing and the color-vector fallback without placing real
 
 The current evidence is intentionally narrow. Before broad compatibility claims, add tests for at least:
 
+- shared image resources reused across pages/forms,
+- image XObjects nested inside Form XObjects,
+- additional color spaces and bit depths,
+- color-key masks and unusual transparency combinations,
 - PDFs with links/bookmarks,
 - annotations/forms,
 - signed PDFs,
@@ -69,4 +92,5 @@ The current evidence is intentionally narrow. Before broad compatibility claims,
 - transparency and unusual color spaces,
 - rotated/mixed-size pages,
 - very long PDFs and memory limits,
+- target-not-met behavior when JPEG quality alone cannot reach the target,
 - failure/rollback behavior.
