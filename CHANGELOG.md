@@ -28,16 +28,19 @@ The project is currently experimental and does not yet use formal releases.
 - Image-fit CLI with target-byte and minimum-quality controls.
 - Quality search that starts at JPEG quality 100, probes downward, and refines the first successful interval without cumulative recompression.
 - Tests for image-route fitting, source immutability, compatible soft-mask preservation, annotation/metadata retention, skip behavior, and route-mismatch fail-closed behavior.
+- Regression tests that reject PDFs containing signature fields and verify preservation of supported image dictionary semantics such as `/Interpolate` and `/StructParent`.
 
 ### Changed
 
 - Color routing now scans every page at low resolution and uses the maximum per-page color fraction, reducing the risk of incorrectly classifying a partially color document as monochrome.
 - Raw-stream sizing falls back to pypdf stream serialization if private `_data` storage is unavailable instead of relying on parsed `/Length`.
 - The image-heavy route now preserves the original PDF object/page structure and replaces only supported image XObjects instead of reconstructing each page in a new PDF.
+- Image replacement now preserves a defined set of rendering/structure dictionary entries and fails closed when unknown or explicitly unsupported image dictionary semantics would otherwise be discarded.
+- PDFs containing signature fields or certification-permissions structures are rejected by the image execution PoC because a full rewrite may invalidate signatures.
 
 ### Notes
 
 - No application license has been selected yet.
 - No production compression engine, GUI, installer, or release artifact exists yet.
 - Real municipal source documents used for local validation are intentionally excluded from the repository.
-- Image replacement remains deliberately conservative: unsupported masks, color spaces, bit depths, or decoding structures return a fail-closed result rather than being flattened silently.
+- Image replacement remains deliberately conservative: unsupported masks, color spaces, bit depths, decoding structures, unknown image dictionary semantics, or signed/certified PDFs return a fail-closed result rather than being rewritten silently.
