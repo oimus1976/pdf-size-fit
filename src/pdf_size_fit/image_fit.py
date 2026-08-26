@@ -21,6 +21,7 @@ class ImageFitStatus(str, Enum):
     UNSUPPORTED_IMAGE = "unsupported-image"
     TARGET_NOT_MET = "target-not-met"
     SIGNED_PDF_UNSUPPORTED = "signed-pdf-unsupported"
+    PDF_A_UNSUPPORTED = "pdf-a-unsupported"
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,20 @@ def _has_signature_structure(reader: PdfReader) -> bool:
     if not isinstance(fields, (ArrayObject, list)):
         return False
     return any(_contains_signature_field(field) for field in fields)
+
+
+def _has_pdfa_marker(reader: PdfReader) -> bool:
+    root = _resolve_pdf_obj(reader.trailer.get("/Root"))
+    if not isinstance(root, DictionaryObject):
+        return False
+    metadata = _resolve_pdf_obj(root.get("/Metadata"))
+    if not isinstance(metadata, StreamObject):
+        return False
+    try:
+        data = metadata.get_data().lower()
+    except Exception:
+        return False
+    return b"http://www.aiim.org/pdfa/ns/id/" in data or b"pdfaid:part" in data
 
 
 def _ref_key(ref: IndirectObject) -> tuple[int, int]:
@@ -289,6 +304,19 @@ def fit_image_heavy_pdf(
             reasons=(
                 "PDF contains a signature field or certification permissions structure",
                 "rewriting a signed PDF can invalidate signatures, so the current PoC writes no output",
+            ),
+        )
+
+    if _has_pdfa_marker(PdfReader(str(input_path))):
+        return ImageFitResult(
+            status=ImageFitStatus.PDF_A_UNSUPPORTED,
+            input_path=str(input_path), output_path=None,
+            input_size_bytes=input_size, output_size_bytes=None,
+            target_bytes=target_bytes, selected_quality=None,
+            images_replaced=0, attempts=(),
+            reasons=(
+                "PDF contains PDF/A identification metadata",
+                "the current PoC does not verify PDF/A conformance after rewriting, so no output is written",
             ),
         )
 
