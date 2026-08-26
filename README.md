@@ -42,23 +42,36 @@ Current route names are `skip`, `image-heavy`, `vector-monochrome`, `vector-colo
 
 ## Image-heavy fitting PoC
 
-The image route can clone the original PDF structure, recompress unique supported image XObjects through pypdf's public image replacement API, and search from high JPEG quality downward until the byte target is met.
+The image route clones the original PDF structure and recompresses unique supported image XObjects through pypdf's public image replacement API.
 
 ```powershell
 pdf-size-fit-image .\oversize.pdf .\oversize-fit.pdf --target-bytes 10000000
 ```
 
+Optional quality floors can be specified explicitly:
+
+```powershell
+pdf-size-fit-image .\oversize.pdf .\oversize-fit.pdf `
+  --target-bytes 10000000 `
+  --min-quality 70 `
+  --min-scale 0.50
+```
+
 The PoC currently:
 
-- starts at JPEG quality 100,
+- starts at full image resolution and JPEG quality 100,
+- exhausts the configured full-resolution JPEG-quality range before considering downsampling,
+- if needed, finds the largest 1%-granularity image scale that can fit at the minimum JPEG quality and then raises JPEG quality at that scale as far as the target permits,
 - rebuilds every trial from the original PDF rather than repeatedly recompressing a lossy intermediate,
-- refines between coarse quality probes to select the highest tested quality that meets the target,
-- preserves supported image dictionary semantics such as a compatible `/SMask`,
+- records both image scale and JPEG quality for each attempt,
+- preserves supported image dictionary semantics such as a compatible `/SMask` at full resolution,
+- refuses to downsample `/SMask` images until the mask can be resized in lockstep,
 - handles shared images nested inside reusable Form XObjects in the current synthetic coverage,
 - verifies page count, page boxes, and rotation before accepting output,
 - refuses unsupported or unknown image structures rather than silently flattening them,
 - refuses signed/certified PDFs,
 - refuses PDFs with standard PDF/A identification metadata until conformance after rewriting can be validated,
+- returns `target-not-met` without writing output if the configured JPEG-quality and image-scale floors are exhausted,
 - never overwrites the input or a pre-existing output file.
 
 Synthetic preservation tests currently cover a bookmark, a basic AcroForm field/value, and an embedded file in addition to the image-specific cases. This is still narrow PoC coverage, not a broad PDF compatibility claim.
