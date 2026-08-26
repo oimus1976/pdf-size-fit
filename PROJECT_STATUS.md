@@ -19,7 +19,7 @@ Two PoCs have crossed the nominal 10,000,000-byte threshold without reducing ima
 - an earlier page-reconstruction experiment produced 8,767,488 bytes at JPEG quality 100,
 - the structure-preserving image-XObject replacement PoC produced 7,573,276 bytes at JPEG quality 100 while retaining compatible existing soft masks.
 
-The second result is now the preferred engineering direction because it clones the original PDF structure and changes supported image XObjects rather than rebuilding pages.
+The second result is the preferred engineering direction because it clones the original PDF structure and changes supported image XObjects rather than rebuilding pages.
 
 ### 2. Monochrome abnormal vector/outline PDF
 
@@ -42,25 +42,33 @@ Validated against the current representative samples with a 10,000,000-byte targ
 
 The classifier also provides `unclassified` and does not guess a destructive route when no current threshold is met.
 
-A merge-blocking review found that the original color detector sampled only the first pages plus the last page, which could misclassify a PDF whose only color content appeared on an unsampled middle page. The implementation now scans every page at low resolution and uses the maximum per-page color fraction, deliberately biasing toward preserving color. A regression test covers the middle-page case.
-
 ## Image-heavy compression execution PoC
 
-The first route-specific execution PoC now:
+The route-specific execution PoC now:
 
 - requires an `image-heavy` diagnosis before it runs,
 - rejects PDFs containing signature fields or certification-permissions structures because rewriting may invalidate signatures,
+- rejects PDFs carrying standard PDF/A identification metadata until post-rewrite conformance can be validated,
 - clones the original PDF with pypdf,
 - replaces each unique supported image XObject through pypdf's public `ImageFile.replace()` API,
-- explicitly restores supported image dictionary semantics that `ImageFile.replace()` would otherwise discard, including `/SMask`, `/Interpolate`, `/Intent`, `/StructParent`, `/Metadata`, and `/OC`,
+- explicitly restores supported image dictionary semantics that `ImageFile.replace()` would otherwise discard,
 - fails closed on explicitly unsupported or unknown image dictionary semantics,
 - starts at JPEG quality 100 and searches downward only when necessary,
 - rebuilds every trial from the original input so lossy recompression does not accumulate,
 - verifies page count, page boxes, rotation, and final byte size before accepting output,
-- refuses to overwrite either the source or a pre-existing destination,
-- fails closed on unsupported image structures.
+- refuses to overwrite either the source or a pre-existing destination.
 
-After adversarial review, synthetic automated coverage is `14 passed` in the local review environment, including signed-PDF rejection and preservation of supported image dictionary semantics. The real-world image-heavy sample was also run through this implementation: 10,478,354 -> 7,573,276 bytes at JPEG quality 100. A PDFium full-document render comparison at scale 1 showed page-wise MAE <= about 0.098, maximum channel difference 4, and PSNR >= about 56.9 dB for that sample. These measurements describe that sample only, not a general visual-quality guarantee.
+The adversarial review suite has expanded from 14 to **17 passing tests** in the local review environment.
+
+Newly validated structure cases:
+
+- a shared image XObject nested inside one Form XObject and reused across two pages remains a single shared indirect image after fitting; the image is replaced once,
+- a synthetic bookmark is preserved,
+- an AcroForm text field and its value are preserved,
+- an embedded file and its bytes are preserved,
+- a PDF carrying standard PDF/A XMP identification metadata is rejected with `pdf-a-unsupported` and no output file.
+
+The real-world image-heavy sample remains 10,478,354 -> 7,573,276 bytes at JPEG quality 100. A PDFium full-document render comparison at scale 1 showed page-wise MAE <= about 0.098, maximum channel difference 4, and PSNR >= about 56.9 dB for that sample. These measurements describe that sample only, not a general visual-quality guarantee.
 
 ## Current design direction
 
@@ -74,20 +82,21 @@ After adversarial review, synthetic automated coverage is `14 passed` in the loc
 - Bias color detection toward false-color rather than false-monochrome results because the latter could destroy information during 1-bit conversion.
 - For image-heavy PDFs, preserve the original PDF structure and replace supported image XObjects rather than reconstructing pages.
 - Treat pypdf image replacement as a dictionary replacement operation: explicitly preserve known semantics and reject unknown/unsafe semantics.
-- Refuse to rewrite signed/certified PDFs in the current PoC.
+- Refuse to rewrite signed/certified PDFs and PDF/A-identified PDFs in the current PoC.
 
 ## Next milestone
 
-Continue reviewing the image-XObject execution PoC against additional structures before treating the route as MVP-ready. Priority cases include:
+Continue narrowing the remaining image-route compatibility gaps before adding image downsampling. Priority cases are now:
 
-1. shared image XObjects reused across pages/forms,
-2. images nested inside Form XObjects,
-3. additional valid color spaces and bit depths,
-4. masks/transparency combinations,
-5. bookmarks, forms, embedded files, optional content, and PDF/A expectations,
-6. target-not-met behavior when JPEG quality alone is insufficient.
+1. additional valid color spaces and bit depths,
+2. color-key masks and more transparency combinations,
+3. optional-content and unusual image dictionary combinations,
+4. rotated/mixed-size pages,
+5. long-document and memory behavior,
+6. target-not-met behavior when JPEG quality alone is insufficient,
+7. a deliberate decision on whether PDF/A support requires an external/local conformance validator.
 
-Only after that review should the PoC consider adding image downsampling as a second-stage size search.
+Shared Form-XObject images, bookmarks, AcroForms, and embedded files now have synthetic preservation coverage; they are no longer completely untested areas, but this does not yet justify broad compatibility claims.
 
 ## Not decided yet
 
@@ -96,7 +105,7 @@ Only after that review should the PoC consider adding image downsampling as a se
 - Packaging / installer method
 - GUI framework
 - Exact safety margin below a nominal 10 MB limit
-- Support policy for forms, attachments, PDF/A, annotations, or other special features
+- Support policy for wider forms/attachments/PDF/A/annotation cases
 - Final routing thresholds and confidence policy
 - Whether the private pypdf raw-stream access should be removed before or during writer-stack selection
 - Whether and how the image route should support downsampling after JPEG-quality search is exhausted
