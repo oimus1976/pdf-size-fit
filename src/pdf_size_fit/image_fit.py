@@ -402,40 +402,41 @@ def fit_image_heavy_pdf(
                 best_candidate, best_quality, best_size, best_replaced = full_resolution
                 best_scale = 1.0
             elif min_scale < 1.0:
-                min_percent = max(1, min(99, ceil(min_scale * 100)))
-                try:
-                    _, min_size, _ = measure(min_percent, min_quality)
-                except UnsupportedImageError as exc:
-                    return ImageFitResult(
-                        status=ImageFitStatus.UNSUPPORTED_IMAGE,
-                        input_path=str(input_path), output_path=None,
-                        input_size_bytes=input_size, output_size_bytes=None,
-                        target_bytes=target_bytes, selected_quality=None,
-                        images_replaced=0, attempts=tuple(attempts),
-                        reasons=(
-                            str(exc),
-                            "full-resolution JPEG quality search did not meet the target and the downsampling fallback is unsafe for this image structure",
-                            "input was left unchanged and no output was written",
-                        ),
-                    )
+                min_percent = max(1, ceil(min_scale * 100))
+                if min_percent <= 99:
+                    try:
+                        _, min_size, _ = measure(min_percent, min_quality)
+                    except UnsupportedImageError as exc:
+                        return ImageFitResult(
+                            status=ImageFitStatus.UNSUPPORTED_IMAGE,
+                            input_path=str(input_path), output_path=None,
+                            input_size_bytes=input_size, output_size_bytes=None,
+                            target_bytes=target_bytes, selected_quality=None,
+                            images_replaced=0, attempts=tuple(attempts),
+                            reasons=(
+                                str(exc),
+                                "full-resolution JPEG quality search did not meet the target and the downsampling fallback is unsafe for this image structure",
+                                "input was left unchanged and no output was written",
+                            ),
+                        )
 
-                if min_size <= target_bytes:
-                    low = min_percent
-                    high = 99
-                    while low < high:
-                        mid = (low + high + 1) // 2
-                        _, mid_size, _ = measure(mid, min_quality)
-                        if mid_size <= target_bytes:
-                            low = mid
-                        else:
-                            high = mid - 1
+                    if min_size <= target_bytes:
+                        low = min_percent
+                        high = 99
+                        while low < high:
+                            mid = (low + high + 1) // 2
+                            _, mid_size, _ = measure(mid, min_quality)
+                            if mid_size <= target_bytes:
+                                low = mid
+                            else:
+                                high = mid - 1
 
-                    selected_percent = low
-                    downsampled = search_quality(selected_percent)
-                    if downsampled is None:
-                        raise RuntimeError("minimum-quality scale probe fit but quality search found no fitting candidate")
-                    best_candidate, best_quality, best_size, best_replaced = downsampled
-                    best_scale = selected_percent / 100.0
+                        selected_percent = low
+                        downsampled = search_quality(selected_percent)
+                        if downsampled is None:
+                            raise RuntimeError("minimum-quality scale probe fit but quality search found no fitting candidate")
+                        best_candidate, best_quality, best_size, best_replaced = downsampled
+                        best_scale = selected_percent / 100.0
 
             if best_candidate is None or best_quality is None or best_size is None or best_scale is None:
                 return ImageFitResult(
