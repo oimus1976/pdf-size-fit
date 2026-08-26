@@ -53,14 +53,16 @@ The route-specific execution PoC now:
 - replaces each unique supported image XObject through pypdf's public `ImageFile.replace()` API,
 - explicitly restores supported image dictionary semantics that `ImageFile.replace()` would otherwise discard,
 - fails closed on explicitly unsupported or unknown image dictionary semantics,
-- starts at JPEG quality 100 and searches downward only when necessary,
+- starts at full image resolution and JPEG quality 100,
+- exhausts the configured full-resolution JPEG-quality range before considering downsampling,
+- if necessary, finds the largest 1%-granularity image scale that fits at the minimum JPEG quality and then raises JPEG quality at that scale as far as the byte target permits,
 - rebuilds every trial from the original input so lossy recompression does not accumulate,
 - verifies page count, page boxes, rotation, and final byte size before accepting output,
 - refuses to overwrite either the source or a pre-existing destination.
 
-The adversarial review suite has expanded from 14 to **17 passing tests** in the local review environment.
+The previously merged structure suite has **17 passing tests**. This branch adds explicit coverage for `target-not-met`, downsampling order and floor exhaustion, minimum-scale validation, and fail-closed behavior when a soft mask would need synchronized resizing. The branch requires user-local and CI validation before merge.
 
-Newly validated structure cases:
+Previously validated structure cases remain:
 
 - a shared image XObject nested inside one Form XObject and reused across two pages remains a single shared indirect image after fitting; the image is replaced once,
 - a synthetic bookmark is preserved,
@@ -68,7 +70,7 @@ Newly validated structure cases:
 - an embedded file and its bytes are preserved,
 - a PDF carrying standard PDF/A XMP identification metadata is rejected with `pdf-a-unsupported` and no output file.
 
-The real-world image-heavy sample remains 10,478,354 -> 7,573,276 bytes at JPEG quality 100. A PDFium full-document render comparison at scale 1 showed page-wise MAE <= about 0.098, maximum channel difference 4, and PSNR >= about 56.9 dB for that sample. These measurements describe that sample only, not a general visual-quality guarantee.
+The real-world image-heavy sample remains 10,478,354 -> 7,573,276 bytes at full resolution and JPEG quality 100. The new downsampling stage is therefore a fallback for harder image-heavy inputs, not a change to that sample's selected result.
 
 ## Current design direction
 
@@ -83,20 +85,19 @@ The real-world image-heavy sample remains 10,478,354 -> 7,573,276 bytes at JPEG 
 - For image-heavy PDFs, preserve the original PDF structure and replace supported image XObjects rather than reconstructing pages.
 - Treat pypdf image replacement as a dictionary replacement operation: explicitly preserve known semantics and reject unknown/unsafe semantics.
 - Refuse to rewrite signed/certified PDFs and PDF/A-identified PDFs in the current PoC.
+- Treat minimum JPEG quality and minimum image scale as explicit quality floors. If both are exhausted, return `target-not-met` and write no output.
 
 ## Next milestone
 
-Continue narrowing the remaining image-route compatibility gaps before adding image downsampling. Priority cases are now:
+Before treating the image route as MVP-ready, validate the new downsampling fallback on Windows/Python 3.12 and CI, then perform representative visual comparisons of downsampled outputs. Remaining compatibility priorities include:
 
 1. additional valid color spaces and bit depths,
 2. color-key masks and more transparency combinations,
-3. optional-content and unusual image dictionary combinations,
-4. rotated/mixed-size pages,
-5. long-document and memory behavior,
-6. target-not-met behavior when JPEG quality alone is insufficient,
+3. synchronized `/SMask` downsampling if it is worth supporting,
+4. optional-content and unusual image dictionary combinations,
+5. rotated/mixed-size pages,
+6. long-document and memory behavior,
 7. a deliberate decision on whether PDF/A support requires an external/local conformance validator.
-
-Shared Form-XObject images, bookmarks, AcroForms, and embedded files now have synthetic preservation coverage; they are no longer completely untested areas, but this does not yet justify broad compatibility claims.
 
 ## Not decided yet
 
@@ -108,4 +109,4 @@ Shared Form-XObject images, bookmarks, AcroForms, and embedded files now have sy
 - Support policy for wider forms/attachments/PDF/A/annotation cases
 - Final routing thresholds and confidence policy
 - Whether the private pypdf raw-stream access should be removed before or during writer-stack selection
-- Whether and how the image route should support downsampling after JPEG-quality search is exhausted
+- Production defaults for minimum JPEG quality and minimum image scale
