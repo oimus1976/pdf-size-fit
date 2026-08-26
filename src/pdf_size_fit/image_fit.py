@@ -9,7 +9,7 @@ from typing import Any
 
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import IndirectObject, NameObject, StreamObject
+from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject, StreamObject
 
 from .diagnose import Route, diagnose_pdf
 
@@ -20,6 +20,7 @@ class ImageFitStatus(str, Enum):
     ROUTE_MISMATCH = "route-mismatch"
     UNSUPPORTED_IMAGE = "unsupported-image"
     TARGET_NOT_MET = "target-not-met"
+    SIGNED_PDF_UNSUPPORTED = "signed-pdf-unsupported"
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,49 @@ class UnsupportedImageError(RuntimeError):
     pass
 
 
+_REPLACED_IMAGE_KEYS = {
+    "/Type", "/Subtype", "/Width", "/Height", "/ColorSpace",
+    "/BitsPerComponent", "/Filter", "/DecodeParms", "/Length",
+}
+_PRESERVED_IMAGE_KEYS = {
+    "/SMask", "/Interpolate", "/Intent", "/Name", "/StructParent",
+    "/ID", "/OPI", "/Metadata", "/OC",
+}
+_REJECTED_IMAGE_KEYS = {"/Decode", "/Mask", "/ImageMask", "/SMaskInData"}
+
+
+def _resolve_pdf_obj(obj: Any) -> Any:
+    return obj.get_object() if isinstance(obj, IndirectObject) else obj
+
+
+def _contains_signature_field(field: Any, inherited_ft: Any = None) -> bool:
+    field = _resolve_pdf_obj(field)
+    if not isinstance(field, DictionaryObject):
+        return False
+    field_type = field.get("/FT", inherited_ft)
+    if field_type == "/Sig":
+        return True
+    kids = _resolve_pdf_obj(field.get("/Kids"))
+    if isinstance(kids, (ArrayObject, list)):
+        return any(_contains_signature_field(kid, field_type) for kid in kids)
+    return False
+
+
+def _has_signature_structure(reader: PdfReader) -> bool:
+    root = _resolve_pdf_obj(reader.trailer.get("/Root"))
+    if not isinstance(root, DictionaryObject):
+        return False
+    if "/Perms" in root:
+        return True
+    acroform = _resolve_pdf_obj(root.get("/AcroForm"))
+    if not isinstance(acroform, DictionaryObject):
+        return False
+    fields = _resolve_pdf_obj(acroform.get("/Fields"))
+    if not isinstance(fields, (ArrayObject, list)):
+        return False
+    return any(_contains_signature_field(field) for field in fields)
+
+
 def _ref_key(ref: IndirectObject) -> tuple[int, int]:
     return ref.idnum, ref.generation
 
@@ -64,7 +108,7 @@ def _simple_colorspace(obj: StreamObject) -> str | None:
     return None
 
 
-def _validate_image_for_replacement(img: Any) -> tuple[IndirectObject, Any | None]:
+def _validate_image_for_replacement(img: Any) -> tuple[IndirectObject, dict[Any, Any]]:
     ref = img.indirect_reference
     if ref is None:
         raise UnsupportedImageError("inline images cannot be replaced with pypdf ImageFile.replace()")
@@ -73,6 +117,20 @@ def _validate_image_for_replacement(img: Any) -> tuple[IndirectObject, Any | Non
     if not isinstance(obj, StreamObject) or obj.get("/Subtype") != "/Image":
         raise UnsupportedImageError("encountered an image entry that is not an image XObject stream")
 
+    keys = {str(key) for key in obj.keys()}
+    rejected = keys & _REJECTED_IMAGE_KEYS
+    if rejected:
+        raise UnsupportedImageError(
+            "unsupported image dictionary keys that may change rendering semantics: "
+            + ", ".join(sorted(rejected))
+        )
+    unknown = keys - _REPLACED_IMAGE_KEYS - _PRESERVED_IMAGE_KEYS - _REJECTED_IMAGE_KEYS
+    if unknown:
+        raise UnsupportedImageError(
+            "unknown image dictionary keys are not safe to discard during replacement: "
+            + ", ".join(sorted(unknown))
+        )
+
     if _simple_colorspace(obj) is None:
         raise UnsupportedImageError(f"unsupported image color space: {obj.get('/ColorSpace')!r}")
 
@@ -80,11 +138,6 @@ def _validate_image_for_replacement(img: Any) -> tuple[IndirectObject, Any | Non
         raise UnsupportedImageError(
             f"unsupported bits per component: {obj.get('/BitsPerComponent')!r}; current PoC accepts 8-bit images"
         )
-
-    if "/Mask" in obj:
-        raise UnsupportedImageError("color-key /Mask images are not supported by the current PoC")
-    if "/Decode" in obj:
-        raise UnsupportedImageError("images with a custom /Decode array are not supported by the current PoC")
 
     smask = obj.get("/SMask")
     if smask is not None:
@@ -97,7 +150,8 @@ def _validate_image_for_replacement(img: Any) -> tuple[IndirectObject, Any | Non
     if img.image is None:
         raise UnsupportedImageError("pypdf could not decode an image XObject through Pillow")
 
-    return ref, smask
+    preserved = {key: value for key, value in obj.items() if str(key) in _PRESERVED_IMAGE_KEYS}
+    return ref, preserved
 
 
 def _base_image_for_jpeg(image: Image.Image, *, has_smask: bool) -> Image.Image:
@@ -129,8 +183,8 @@ def _build_candidate(input_path: Path, output_path: Path, *, quality: int) -> in
                 continue
             seen.add(key)
 
-            ref, smask = _validate_image_for_replacement(img)
-            replacement = _base_image_for_jpeg(img.image, has_smask=smask is not None)
+            ref, preserved = _validate_image_for_replacement(img)
+            replacement = _base_image_for_jpeg(img.image, has_smask=NameObject("/SMask") in preserved)
             try:
                 img.replace(replacement, quality=quality, subsampling=0)
             except Exception as exc:
@@ -138,8 +192,9 @@ def _build_candidate(input_path: Path, output_path: Path, *, quality: int) -> in
                     f"image replacement failed for {img.name}: {type(exc).__name__}: {exc}"
                 ) from exc
 
-            if smask is not None:
-                ref.get_object()[NameObject("/SMask")] = smask
+            new_obj = ref.get_object()
+            for key, value in preserved.items():
+                new_obj[key] = value
 
             replaced += 1
 
@@ -222,6 +277,19 @@ def fit_image_heavy_pdf(
             target_bytes=target_bytes, selected_quality=None,
             images_replaced=0, attempts=(),
             reasons=(f"diagnosis proposed route {diagnosis.route.value!r}, not 'image-heavy'",),
+        )
+
+    if _has_signature_structure(PdfReader(str(input_path))):
+        return ImageFitResult(
+            status=ImageFitStatus.SIGNED_PDF_UNSUPPORTED,
+            input_path=str(input_path), output_path=None,
+            input_size_bytes=input_size, output_size_bytes=None,
+            target_bytes=target_bytes, selected_quality=None,
+            images_replaced=0, attempts=(),
+            reasons=(
+                "PDF contains a signature field or certification permissions structure",
+                "rewriting a signed PDF can invalidate signatures, so the current PoC writes no output",
+            ),
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
