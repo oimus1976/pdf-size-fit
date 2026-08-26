@@ -19,7 +19,7 @@ Three compression routes are under investigation:
 
 1. **Image-heavy PDFs** - recompress image XObjects while preserving text/vector content where possible.
 2. **Abnormally heavy monochrome vector/outline PDFs** - rasterize and encode as 1-bit CCITT Group 4.
-3. **Abnormally heavy color vector/outline PDFs** - rasterize and encode as JPEG, searching for the highest-quality settings that satisfies the target size.
+3. **Abnormally heavy color vector/outline PDFs** - rasterize and encode as JPEG, searching for the highest-quality settings that satisfy the target size.
 
 The preferred behavior is to make no change when a PDF is already below the configured threshold.
 
@@ -42,7 +42,7 @@ Current route names are `skip`, `image-heavy`, `vector-monochrome`, `vector-colo
 
 ## Image-heavy fitting PoC
 
-The current image-route branch can clone the original PDF structure, recompress unique image XObjects through pypdf's public image replacement API, and search from high JPEG quality downward until the byte target is met.
+The image route can clone the original PDF structure, recompress unique supported image XObjects through pypdf's public image replacement API, and search from high JPEG quality downward until the byte target is met.
 
 ```powershell
 pdf-size-fit-image .\oversize.pdf .\oversize-fit.pdf --target-bytes 10000000
@@ -53,12 +53,15 @@ The PoC currently:
 - starts at JPEG quality 100,
 - rebuilds every trial from the original PDF rather than repeatedly recompressing a lossy intermediate,
 - refines between coarse quality probes to select the highest tested quality that meets the target,
-- preserves a compatible existing `/SMask` when replacing an image,
+- preserves supported image dictionary semantics such as a compatible `/SMask`,
+- handles shared images nested inside reusable Form XObjects in the current synthetic coverage,
 - verifies page count, page boxes, and rotation before accepting output,
-- refuses unsupported image structures rather than silently flattening them,
+- refuses unsupported or unknown image structures rather than silently flattening them,
+- refuses signed/certified PDFs,
+- refuses PDFs with standard PDF/A identification metadata until conformance after rewriting can be validated,
 - never overwrites the input or a pre-existing output file.
 
-This is still narrow PoC coverage, not a broad PDF compatibility claim.
+Synthetic preservation tests currently cover a bookmark, a basic AcroForm field/value, and an embedded file in addition to the image-specific cases. This is still narrow PoC coverage, not a broad PDF compatibility claim.
 
 ## Project stage
 
