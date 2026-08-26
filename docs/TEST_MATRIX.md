@@ -29,7 +29,7 @@ Synthetic unit tests exercise all diagnosis outcomes without committing multi-me
 
 ## Image-route execution validation
 
-The image-XObject execution PoC has synthetic coverage for:
+The merged image-XObject execution PoC has synthetic coverage for:
 
 - successful target fitting,
 - highest-quality refinement after a coarse quality probe crosses the target,
@@ -46,11 +46,23 @@ The image-XObject execution PoC has synthetic coverage for:
 - embedded-file preservation,
 - fail-closed refusal when standard PDF/A identification metadata is present.
 
-Current local review-suite result after adding this coverage: **`17 passed`**.
+The merged review-suite baseline is **`17 passed`**.
+
+The downsampling-fallback branch adds five regression cases:
+
+1. `target-not-met` remains explicit when downsampling is disabled (`min_scale=1.0`),
+2. downsampling starts only after every allowed full-resolution JPEG-quality candidate fails,
+3. source immutability and target-size acceptance remain enforced for a downsampled result,
+4. downsampling fails closed for `/SMask` images until base image and mask can be resized together,
+5. exhausting both the minimum JPEG quality and minimum image scale returns `target-not-met` without output; invalid `min_scale` values are rejected.
+
+Branch-local and CI results for these new cases must be recorded before merge; this document does not pre-claim a passing count.
+
+The downsampling search is resolution-first: after full-resolution quality search fails, the current PoC probes the configured minimum quality to find the largest integer-percent image scale that can meet the target, then searches JPEG quality upward at that scale. Candidate PDFs are always rebuilt from the original input.
 
 The shared-Form fixture confirmed that one nested image reused across two pages remains one shared indirect image after compression and is counted as one replacement. A render comparison also confirmed that both pages remain renderable after replacement; as expected for lossy JPEG recompression, pixel differences exist and this synthetic noise fixture is not used as a perceptual-quality benchmark.
 
-For T02b, the real-world image-heavy sample was rendered with PDFium before and after the structure-preserving quality-100 replacement. Across all 11 pages at render scale 1, the observed page-wise maximum MAE was about 0.098, maximum channel difference was 4, and minimum PSNR was about 56.9 dB. These numbers are sample-specific evidence only.
+For T02b, the real-world image-heavy sample was rendered with PDFium before and after the structure-preserving quality-100 replacement. Across all 11 pages at render scale 1, the observed page-wise maximum MAE was about 0.098, maximum channel difference was 4, and minimum PSNR was about 56.9 dB. These numbers are sample-specific evidence only. That sample already fits at full resolution, so it does not validate the new downsampling fallback.
 
 ## T01 notes
 
@@ -90,13 +102,14 @@ It exists to validate routing and the color-vector fallback without placing real
 
 The current evidence is intentionally narrow. Before broad compatibility claims, add tests for at least:
 
+- representative visual-quality comparisons for downsampled real-world/image-like documents,
 - additional color spaces and bit depths,
 - color-key masks and additional transparency combinations,
+- synchronized `/SMask` downsampling if supported,
 - optional-content and unusual image dictionary combinations,
 - rotated/mixed-size pages,
 - very long PDFs and memory limits,
-- target-not-met behavior when JPEG quality alone cannot reach the target,
 - failure/rollback behavior,
 - whether PDF/A support is feasible with a local conformance-validation step rather than unconditional refusal.
 
-Shared Form-XObject images, bookmarks, a basic AcroForm field, embedded files, signed-PDF refusal, and PDF/A-marker refusal now have synthetic regression coverage but are not broad compatibility guarantees.
+Shared Form-XObject images, bookmarks, a basic AcroForm field, embedded files, signed-PDF refusal, and PDF/A-marker refusal have synthetic regression coverage but are not broad compatibility guarantees.
