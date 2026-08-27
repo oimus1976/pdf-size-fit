@@ -55,12 +55,15 @@ The route-specific execution PoC now:
 - fails closed on explicitly unsupported or unknown image dictionary semantics,
 - starts at full image resolution and JPEG quality 100,
 - exhausts the configured full-resolution JPEG-quality range before considering downsampling,
-- if necessary, finds the largest 1%-granularity image scale that fits at the minimum JPEG quality and then raises JPEG quality at that scale as far as the byte target permits,
+- keeps downsampling disabled by default (`min_scale=1.0`) until the destructive fallback has representative visual validation,
+- when explicitly enabled, scans 99%, 98%, 97% ... down to the configured scale floor at the minimum JPEG quality and selects the first fitting scale,
+- uses ceiling pixel rounding so integer dimensions do not cross the configured relative scale floor,
+- then raises JPEG quality at that scale as far as the current quality search permits,
 - rebuilds every trial from the original input so lossy recompression does not accumulate,
 - verifies page count, page boxes, rotation, and final byte size before accepting output,
 - refuses to overwrite either the source or a pre-existing destination.
 
-The previously merged structure suite has **17 passing tests**. This branch adds explicit coverage for `target-not-met`, downsampling order and floor exhaustion, minimum-scale validation, and fail-closed behavior when a soft mask would need synchronized resizing. The branch requires user-local and CI validation before merge.
+The previously merged structure suite has **17 passing tests**. The first downsampling branch head was validated on the new Windows host with Python 3.14.1 at **23 passed**, and GitHub Actions passed on Python 3.11 and 3.12. An adversarial review then tightened the policy: opt-in downsampling, ceiling pixel rounding, and descending percent-scale search. New regression tests were added for those fixes; the revised head still requires fresh local and CI validation before Ready/merge.
 
 Previously validated structure cases remain:
 
@@ -86,10 +89,19 @@ The real-world image-heavy sample remains 10,478,354 -> 7,573,276 bytes at full 
 - Treat pypdf image replacement as a dictionary replacement operation: explicitly preserve known semantics and reject unknown/unsafe semantics.
 - Refuse to rewrite signed/certified PDFs and PDF/A-identified PDFs in the current PoC.
 - Treat minimum JPEG quality and minimum image scale as explicit quality floors. If both are exhausted, return `target-not-met` and write no output.
+- Treat relative scale as a PoC control, not an effective-DPI or readability guarantee.
+- Treat the current resolution-first scale/quality ordering as a provisional policy rather than a perceptual-quality optimum.
 
 ## Next milestone
 
-Before treating the image route as MVP-ready, validate the new downsampling fallback on Windows/Python 3.12 and CI, then perform representative visual comparisons of downsampled outputs. Remaining compatibility priorities include:
+Before treating PR #4 as Ready:
+
+1. validate the revised safety-fix head locally and in CI,
+2. force a representative real/image-like PDF through the downsampling path with an intentionally tighter byte target,
+3. compare before/after rendering at fixed conditions and inspect readability/visual degradation,
+4. record that evidence without turning it into a general quality guarantee.
+
+Remaining compatibility priorities include:
 
 1. additional valid color spaces and bit depths,
 2. color-key masks and more transparency combinations,
@@ -97,7 +109,8 @@ Before treating the image route as MVP-ready, validate the new downsampling fall
 4. optional-content and unusual image dictionary combinations,
 5. rotated/mixed-size pages,
 6. long-document and memory behavior,
-7. a deliberate decision on whether PDF/A support requires an external/local conformance validator.
+7. image-specific/downsampling-by-contribution strategies so low-value size contributors such as small logos or codes are not degraded unnecessarily,
+8. a deliberate decision on whether PDF/A support requires an external/local conformance validator.
 
 ## Not decided yet
 
@@ -109,4 +122,5 @@ Before treating the image route as MVP-ready, validate the new downsampling fall
 - Support policy for wider forms/attachments/PDF/A/annotation cases
 - Final routing thresholds and confidence policy
 - Whether the private pypdf raw-stream access should be removed before or during writer-stack selection
-- Production defaults for minimum JPEG quality and minimum image scale
+- Production defaults for minimum JPEG quality and any automatic downsampling policy
+- Whether effective DPI or other content-aware limits should replace a simple relative `min_scale` in production
