@@ -7,6 +7,7 @@ import zlib
 import pytest
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
+from pypdf.generic import NameObject
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -57,7 +58,6 @@ def _rewrite_first_soft_mask(
     smask = image_obj.get("/SMask")
     assert smask is not None
     smask_obj = smask.get_object()
-    assert smask_obj.get("/Filter") == "/FlateDecode"
 
     width = int(smask_obj.get("/Width"))
     height = int(smask_obj.get("/Height"))
@@ -65,8 +65,12 @@ def _rewrite_first_soft_mask(
     if non_opaque_first_sample:
         data[0] = 254
 
-    # Synthetic-fixture mutation only: keep the existing FlateDecode filter and
-    # replace its encoded stream bytes deterministically.
+    # Synthetic-fixture mutation only: ReportLab may emit an ASCII85+Flate
+    # filter chain. Normalize this test stream to a single FlateDecode filter
+    # before replacing the encoded bytes, so the fixture does not depend on
+    # ReportLab's chosen transport encoding.
+    smask_obj[NameObject("/Filter")] = NameObject("/FlateDecode")
+    smask_obj.pop(NameObject("/DecodeParms"), None)
     smask_obj._data = zlib.compress(bytes(data))
 
     with output.open("wb") as fh:
