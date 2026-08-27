@@ -73,13 +73,19 @@ Current PoC design:
 8. Fail closed if an image has rendering semantics that are explicitly unsupported (`/Decode`, `/Mask`, `/ImageMask`, `/SMaskInData`) or an unknown dictionary key that the PoC cannot prove safe to discard.
 9. Start at full image resolution with JPEG quality 100.
 10. Search JPEG quality downward to the configured minimum and refine the first fitting interval one quality point at a time.
-11. If no full-resolution candidate fits, use the configured minimum JPEG quality to find the largest image scale that can meet the target. The current PoC uses integer-percent scale granularity and a binary search between the configured minimum scale and 99%.
-12. At that largest fitting scale, search JPEG quality again from high to low and select the highest fitting quality.
-13. Rebuild every candidate from the original input, never from a previous lossy candidate.
-14. Verify page count, media boxes, rotation, and final byte target before copying a candidate to the requested output.
-15. Do not overwrite the source or an existing destination.
+11. Keep downsampling disabled by default (`min_scale=1.0`) while the destructive fallback is still being validated. A caller must explicitly select a lower minimum scale to opt in.
+12. If opt-in downsampling is enabled and no full-resolution candidate fits, scan integer-percent scales from 99% downward to the configured minimum scale at the configured minimum JPEG quality. The first fitting scale is the largest scale observed by that exhaustive percent-granularity scan; this avoids relying on strict file-size monotonicity across resampled JPEGs.
+13. At that selected scale, search JPEG quality again from high to low and select the highest fitting quality found by the current quality search.
+14. Rebuild every candidate from the original input, never from a previous lossy candidate.
+15. Use ceiling rounding for downsampled pixel dimensions so integer rounding does not cross the requested relative scale floor.
+16. Verify page count, media boxes, rotation, and final byte target before copying a candidate to the requested output.
+17. Do not overwrite the source or an existing destination.
 
-The fallback therefore uses a lexicographic quality policy: **preserve image resolution first, then maximize JPEG quality within that resolution**, subject to the configured minimum JPEG quality and minimum image scale. This is a deliberate PoC policy, not a claim that spatial resolution and JPEG quality are universally comparable.
+The fallback therefore uses a lexicographic quality policy: **preserve image resolution first, then maximize JPEG quality within that resolution**, subject to the configured minimum JPEG quality and minimum image scale. This is a provisional PoC policy, not a claim that it maximizes perceptual quality. A lower-resolution/high-JPEG-quality candidate can look better than a higher-resolution/low-JPEG-quality candidate for some photographic content, while text-heavy slide imagery may behave differently.
+
+`min_scale` is only a **relative source-pixel floor**. It is not an effective-DPI, readability, barcode/QR-code, or OCR safety guarantee. For example, reducing a 600 dpi source to 50% is very different from reducing a 120 dpi source to 50%. A future production-quality policy may need page-placement-aware effective-DPI limits instead of, or in addition to, a simple relative scale.
+
+The current fallback applies the selected scale uniformly to all supported image XObjects that it replaces. This is intentionally simple for the PoC but can unnecessarily shrink small logos, codes, or other low-contribution images when one dominant photograph explains most of the file size. Future optimization should consider size contribution and image-specific safety constraints before enabling automatic downsampling by default.
 
 The current conservative supported image set is intentionally narrow: 8-bit `/DeviceRGB` and `/DeviceGray` image XObjects, optionally with a dimension-matching soft mask. Full-resolution JPEG recompression can preserve a compatible `/SMask`. Downsampling currently refuses `/SMask` images because resizing the base image without resizing the mask in lockstep would create mismatched dimensions. The route also fails closed on unsupported color spaces/bit depths, masks/decoding semantics, unknown image dictionary semantics, signed/certified PDFs, or PDF/A-identified PDFs.
 
@@ -89,7 +95,7 @@ The PDF/A check is intentionally conservative and limited: it looks for standard
 
 If the target cannot be met at or above both configured floors, the route returns `target-not-met` and writes no output. The tool should surface another route or a user-visible fallback rather than silently crossing the quality floor.
 
-A real-world image-heavy sample reached the 10,000,000-byte target at full resolution and quality 100, so the downsampling fallback was not needed for that sample. The structure-preserving implementation produced 7,573,276 bytes from a 10,478,354-byte input.
+A real-world image-heavy sample reached the 10,000,000-byte target at full resolution and quality 100, so the downsampling fallback was not needed for that sample. The structure-preserving implementation produced 7,573,276 bytes from a 10,478,354-byte input. Before the fallback is considered suitable for automatic/default use, a representative real/image-like PDF must be forced through the downsampling path and compared before/after at fixed rendering conditions.
 
 ## Route B: monochrome abnormal vector/outline PDFs
 
@@ -134,7 +140,7 @@ Before a result is accepted, the PoC should eventually verify at least:
 
 The image-route PoC currently automates the first five of these for accepted outputs, records scale/quality attempt metrics, rejects signed/certified and PDF/A-identified PDFs, and fails closed when image semantics fall outside its current preservation policy.
 
-Remaining high-priority coverage includes additional color spaces/bit depths, color-key masks and transparency variants, optional-content combinations, rotated/mixed-size pages, very long files, memory behavior, and representative visual validation of the downsampling fallback.
+Remaining high-priority coverage includes representative visual validation of the downsampling fallback, additional color spaces/bit depths, color-key masks and transparency variants, optional-content combinations, rotated/mixed-size pages, very long files, and memory behavior.
 
 ## Public test data policy
 
