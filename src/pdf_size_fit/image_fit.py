@@ -213,8 +213,8 @@ def _build_candidate(input_path: Path, output_path: Path, *, quality: int, scale
                     raise UnsupportedImageError(
                         "downsampling an image with /SMask is not supported until the soft mask can be resized in lockstep"
                     )
-                new_width = max(1, round(replacement.width * scale))
-                new_height = max(1, round(replacement.height * scale))
+                new_width = max(1, ceil(replacement.width * scale))
+                new_height = max(1, ceil(replacement.height * scale))
                 replacement = replacement.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
             try:
@@ -277,7 +277,7 @@ def fit_image_heavy_pdf(
     *,
     target_bytes: int = 10_000_000,
     min_quality: int = 70,
-    min_scale: float = 0.50,
+    min_scale: float = 1.0,
 ) -> ImageFitResult:
     if target_bytes <= 0:
         raise ValueError("target_bytes must be greater than zero")
@@ -405,7 +405,12 @@ def fit_image_heavy_pdf(
                 min_percent = max(1, ceil(min_scale * 100))
                 if min_percent <= 99:
                     try:
-                        _, min_size, _ = measure(min_percent, min_quality)
+                        selected_percent: int | None = None
+                        for scale_percent in range(99, min_percent - 1, -1):
+                            _, scale_size, _ = measure(scale_percent, min_quality)
+                            if scale_size <= target_bytes:
+                                selected_percent = scale_percent
+                                break
                     except UnsupportedImageError as exc:
                         return ImageFitResult(
                             status=ImageFitStatus.UNSUPPORTED_IMAGE,
@@ -420,18 +425,7 @@ def fit_image_heavy_pdf(
                             ),
                         )
 
-                    if min_size <= target_bytes:
-                        low = min_percent
-                        high = 99
-                        while low < high:
-                            mid = (low + high + 1) // 2
-                            _, mid_size, _ = measure(mid, min_quality)
-                            if mid_size <= target_bytes:
-                                low = mid
-                            else:
-                                high = mid - 1
-
-                        selected_percent = low
+                    if selected_percent is not None:
                         downsampled = search_quality(selected_percent)
                         if downsampled is None:
                             raise RuntimeError("minimum-quality scale probe fit but quality search found no fitting candidate")
