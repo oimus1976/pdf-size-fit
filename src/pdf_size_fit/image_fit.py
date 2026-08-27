@@ -289,7 +289,17 @@ def _build_candidate(
 
             if scale < 1.0:
                 if has_smask:
-                    if key not in removable_opaque_smask_refs:
+                    writer_obj = ref.get_object()
+                    width = writer_obj.get("/Width")
+                    height = writer_obj.get("/Height")
+                    smask = writer_obj.get("/SMask")
+                    if (
+                        not removable_opaque_smask_refs
+                        or not isinstance(width, int)
+                        or not isinstance(height, int)
+                        or smask is None
+                        or not _is_redundant_opaque_smask(smask, width=width, height=height)
+                    ):
                         raise UnsupportedImageError(
                             "downsampling an image with a non-redundant or unproven /SMask is not supported"
                         )

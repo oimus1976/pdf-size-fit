@@ -7,7 +7,7 @@ import zlib
 import pytest
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import NameObject
+from pypdf.generic import DictionaryObject, NameObject
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -72,6 +72,20 @@ def _rewrite_first_soft_mask(
     smask_obj[NameObject("/Filter")] = NameObject("/FlateDecode")
     smask_obj.pop(NameObject("/DecodeParms"), None)
     smask_obj._data = zlib.compress(bytes(data))
+
+    with output.open("wb") as fh:
+        writer.write(fh)
+
+
+def _clone_with_leading_unreachable_object(source: Path, output: Path) -> None:
+    reader = PdfReader(str(source))
+    writer = PdfWriter()
+
+    # Synthetic-fixture construction only: register an unreachable object
+    # before cloning the page graph so clone_from drops it and renumbers the
+    # reachable image objects.
+    writer._add_object(DictionaryObject())
+    writer.append_pages_from_reader(reader)
 
     with output.open("wb") as fh:
         writer.write(fh)
@@ -192,6 +206,44 @@ def test_downsampling_allows_proven_fully_opaque_soft_mask(tmp_path: Path) -> No
     output_reader = PdfReader(str(output))
     output_image = output_reader.pages[0].images[0]
     output_ref = output_image.indirect_reference
+    assert output_ref is not None
+    assert output_ref.get_object().get("/SMask") is None
+
+
+def test_downsampling_allows_opaque_smask_after_writer_renumbers_image_ref(tmp_path: Path) -> None:
+    transparent = tmp_path / "transparent.pdf"
+    opaque_smask = tmp_path / "opaque-smask.pdf"
+    source = tmp_path / "renumbered-source.pdf"
+    output = tmp_path / "output.pdf"
+    _generate_transparent_image_pdf(transparent)
+    _rewrite_first_soft_mask(transparent, opaque_smask)
+    _clone_with_leading_unreachable_object(opaque_smask, source)
+
+    source_reader = PdfReader(str(source))
+    source_ref = source_reader.pages[0].images[0].indirect_reference
+    assert source_ref is not None
+    source_key = (source_ref.idnum, source_ref.generation)
+
+    removable = _find_redundant_opaque_smask_images(source)
+    assert source_key in removable
+
+    writer = PdfWriter(clone_from=str(source))
+    writer_ref = writer.pages[0].images[0].indirect_reference
+    assert writer_ref is not None
+    writer_key = (writer_ref.idnum, writer_ref.generation)
+    assert writer_key != source_key
+    assert writer_key not in removable
+
+    _build_candidate(
+        source,
+        output,
+        quality=70,
+        scale=0.90,
+        removable_opaque_smask_refs=removable,
+    )
+
+    output_reader = PdfReader(str(output))
+    output_ref = output_reader.pages[0].images[0].indirect_reference
     assert output_ref is not None
     assert output_ref.get_object().get("/SMask") is None
 
