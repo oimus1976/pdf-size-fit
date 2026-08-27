@@ -48,17 +48,23 @@ The merged image-XObject execution PoC has synthetic coverage for:
 
 The merged review-suite baseline is **`17 passed`**.
 
-The downsampling-fallback branch adds five regression cases:
+The downsampling-fallback branch adds regression cases for:
 
-1. `target-not-met` remains explicit when downsampling is disabled (`min_scale=1.0`),
-2. downsampling starts only after every allowed full-resolution JPEG-quality candidate fails,
-3. source immutability and target-size acceptance remain enforced for a downsampled result,
-4. downsampling fails closed for `/SMask` images until base image and mask can be resized together,
-5. exhausting both the minimum JPEG quality and minimum image scale returns `target-not-met` without output; invalid `min_scale` values are rejected.
+1. explicit `target-not-met` when downsampling is disabled,
+2. downsampling only after full-resolution JPEG-quality exhaustion,
+3. source immutability and target-size acceptance for a downsampled result,
+4. fail-closed behavior for `/SMask` images until base image and mask can be resized together,
+5. `target-not-met` after exhausting the configured minimum scale,
+6. invalid and sub-percent `min_scale` boundary handling,
+7. downsampling remaining disabled when the caller accepts the default arguments,
+8. ceiling pixel rounding preserving the requested relative scale floor even for very small images,
+9. exhaustive descending percent-scale search selecting the largest fitting integer-percent scale at the configured minimum JPEG quality.
 
-Branch-local and CI results for these new cases must be recorded before merge; this document does not pre-claim a passing count.
+The first branch head before adversarial review was validated on Windows/Python 3.14.1 at `23 passed`, and GitHub Actions passed on Python 3.11 and 3.12. The safety-review fixes and three added regression tests require a fresh local/CI run; this document does not pre-claim the revised passing count.
 
-The downsampling search is resolution-first: after full-resolution quality search fails, the current PoC probes the configured minimum quality to find the largest integer-percent image scale that can meet the target, then searches JPEG quality upward at that scale. Candidate PDFs are always rebuilt from the original input.
+The downsampling search is resolution-first and deliberately conservative. After full-resolution quality search fails, downsampling remains off unless the caller explicitly sets `min_scale < 1.0`. When enabled, the current PoC checks 99%, 98%, 97% ... downward at the minimum JPEG quality and chooses the first fitting scale, then searches JPEG quality at that scale. Candidate PDFs are always rebuilt from the original input.
+
+This search policy does **not** claim perceptual optimality. `min_scale` is relative to source pixels rather than effective DPI, and the current PoC applies the same selected scale to every supported image it replaces. Those limitations must be considered before enabling downsampling automatically.
 
 The shared-Form fixture confirmed that one nested image reused across two pages remains one shared indirect image after compression and is counted as one replacement. A render comparison also confirmed that both pages remain renderable after replacement; as expected for lossy JPEG recompression, pixel differences exist and this synthetic noise fixture is not used as a perceptual-quality benchmark.
 
@@ -100,15 +106,15 @@ It exists to validate routing and the color-vector fallback without placing real
 
 ## Missing coverage
 
-The current evidence is intentionally narrow. Before broad compatibility claims, add tests for at least:
+Before PR #4 is Ready, force a representative real/image-like PDF through the downsampling path and compare before/after rendering at fixed conditions. Beyond that, the current evidence remains intentionally narrow and should add coverage for at least:
 
-- representative visual-quality comparisons for downsampled real-world/image-like documents,
 - additional color spaces and bit depths,
 - color-key masks and additional transparency combinations,
 - synchronized `/SMask` downsampling if supported,
 - optional-content and unusual image dictionary combinations,
 - rotated/mixed-size pages,
 - very long PDFs and memory limits,
+- image-specific size-contribution/downsampling decisions,
 - failure/rollback behavior,
 - whether PDF/A support is feasible with a local conformance-validation step rather than unconditional refusal.
 
