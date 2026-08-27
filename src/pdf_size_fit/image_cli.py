@@ -18,8 +18,11 @@ def main() -> int:
     parser.add_argument(
         "--min-scale",
         type=float,
-        default=0.50,
-        help="minimum image scale allowed for the downsampling fallback (default: 0.50)",
+        default=1.0,
+        help=(
+            "minimum image scale allowed for the downsampling fallback; "
+            "default 1.0 keeps downsampling disabled unless explicitly opted in"
+        ),
     )
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
