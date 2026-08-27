@@ -81,6 +81,8 @@ The PoC currently:
 
 Synthetic preservation tests currently cover a bookmark, a basic AcroForm field/value, and an embedded file in addition to the image-specific cases. This is still narrow PoC coverage, not a broad PDF compatibility claim.
 
+The downsampling fallback remains behind an explicit opt-in gate for this PR. Before it is treated as ready for broader use, the revised safety tests must pass locally and in CI, and a representative real/image-like PDF must be forced through the downsampling path for fixed-condition before/after visual comparison.
+
 ## Project stage
 
 This repository currently records experiments and design decisions. Backend libraries, license, packaging method, GUI, and release policy are **not yet finalized**.
