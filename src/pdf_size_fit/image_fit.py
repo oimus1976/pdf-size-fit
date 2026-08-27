@@ -126,6 +126,78 @@ def _simple_colorspace(obj: StreamObject) -> str | None:
     return None
 
 
+def _decode_is_identity_gray(decode: Any) -> bool:
+    if decode is None:
+        return True
+    decode = _resolve_pdf_obj(decode)
+    if not isinstance(decode, (ArrayObject, list, tuple)) or len(decode) != 2:
+        return False
+    try:
+        return float(decode[0]) == 0.0 and float(decode[1]) == 1.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_redundant_opaque_smask(smask: Any, *, width: int, height: int) -> bool:
+    smask_obj = _resolve_pdf_obj(smask)
+    if not isinstance(smask_obj, StreamObject) or smask_obj.get("/Subtype") != "/Image":
+        return False
+    if _simple_colorspace(smask_obj) != "/DeviceGray":
+        return False
+    if smask_obj.get("/BitsPerComponent") != 8:
+        return False
+    if smask_obj.get("/Width") != width or smask_obj.get("/Height") != height:
+        return False
+    if "/Matte" in smask_obj:
+        return False
+    if any(key in smask_obj for key in ("/Mask", "/SMask", "/ImageMask", "/SMaskInData")):
+        return False
+    if not _decode_is_identity_gray(smask_obj.get("/Decode")):
+        return False
+
+    expected_bytes = width * height
+    try:
+        data = smask_obj.get_data()
+    except Exception:
+        return False
+    if len(data) != expected_bytes:
+        return False
+    return data.strip(b"\xff") == b""
+
+
+def _find_redundant_opaque_smask_images(input_path: Path) -> frozenset[tuple[int, int]]:
+    reader = PdfReader(str(input_path))
+    seen: set[tuple[int, int]] = set()
+    removable: set[tuple[int, int]] = set()
+
+    for page in reader.pages:
+        for img in page.images:
+            ref = img.indirect_reference
+            if ref is None:
+                continue
+            key = _ref_key(ref)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            obj = ref.get_object()
+            smask = obj.get("/SMask")
+            if smask is None:
+                continue
+
+            width = obj.get("/Width")
+            height = obj.get("/Height")
+            if not isinstance(width, int) or not isinstance(height, int):
+                raise UnsupportedImageError("/SMask base image dimensions are not integer values")
+            if not _is_redundant_opaque_smask(smask, width=width, height=height):
+                raise UnsupportedImageError(
+                    "downsampling an image with a non-redundant or unproven /SMask is not supported"
+                )
+            removable.add(key)
+
+    return frozenset(removable)
+
+
 def _validate_image_for_replacement(img: Any) -> tuple[IndirectObject, dict[Any, Any]]:
     ref = img.indirect_reference
     if ref is None:
@@ -186,7 +258,14 @@ def _base_image_for_jpeg(image: Image.Image, *, has_smask: bool) -> Image.Image:
     return image.convert("RGB")
 
 
-def _build_candidate(input_path: Path, output_path: Path, *, quality: int, scale: float = 1.0) -> int:
+def _build_candidate(
+    input_path: Path,
+    output_path: Path,
+    *,
+    quality: int,
+    scale: float = 1.0,
+    removable_opaque_smask_refs: frozenset[tuple[int, int]] = frozenset(),
+) -> int:
     if not 0.0 < scale <= 1.0:
         raise ValueError("scale must be greater than 0 and at most 1")
 
@@ -210,9 +289,11 @@ def _build_candidate(input_path: Path, output_path: Path, *, quality: int, scale
 
             if scale < 1.0:
                 if has_smask:
-                    raise UnsupportedImageError(
-                        "downsampling an image with /SMask is not supported until the soft mask can be resized in lockstep"
-                    )
+                    if key not in removable_opaque_smask_refs:
+                        raise UnsupportedImageError(
+                            "downsampling an image with a non-redundant or unproven /SMask is not supported"
+                        )
+                    preserved.pop(NameObject("/SMask"), None)
                 new_width = max(1, ceil(replacement.width * scale))
                 new_height = max(1, ceil(replacement.height * scale))
                 replacement = replacement.resize((new_width, new_height), Image.Resampling.LANCZOS)
@@ -225,8 +306,8 @@ def _build_candidate(input_path: Path, output_path: Path, *, quality: int, scale
                 ) from exc
 
             new_obj = ref.get_object()
-            for key, value in preserved.items():
-                new_obj[key] = value
+            for preserved_key, value in preserved.items():
+                new_obj[preserved_key] = value
 
             replaced += 1
 
@@ -347,6 +428,7 @@ def fit_image_heavy_pdf(
     best_size: int | None = None
     best_replaced = 0
     best_scale: float | None = None
+    removable_opaque_smask_refs: frozenset[tuple[int, int]] = frozenset()
 
     try:
         with tempfile.TemporaryDirectory(prefix="pdf-size-fit-") as temp_dir_name:
@@ -361,7 +443,13 @@ def fit_image_heavy_pdf(
 
                 scale = scale_percent / 100.0
                 candidate = temp_dir / f"candidate-s{scale_percent:03d}-q{quality}.pdf"
-                replaced = _build_candidate(input_path, candidate, quality=quality, scale=scale)
+                replaced = _build_candidate(
+                    input_path,
+                    candidate,
+                    quality=quality,
+                    scale=scale,
+                    removable_opaque_smask_refs=removable_opaque_smask_refs,
+                )
                 _verify_candidate(input_path, candidate)
                 size = candidate.stat().st_size
                 attempts.append(ImageFitAttempt(quality=quality, size_bytes=size, scale=scale))
@@ -405,6 +493,7 @@ def fit_image_heavy_pdf(
                 min_percent = max(1, ceil(min_scale * 100))
                 if min_percent <= 99:
                     try:
+                        removable_opaque_smask_refs = _find_redundant_opaque_smask_images(input_path)
                         selected_percent: int | None = None
                         for scale_percent in range(99, min_percent - 1, -1):
                             _, scale_size, _ = measure(scale_percent, min_quality)
@@ -464,16 +553,22 @@ def fit_image_heavy_pdf(
     else:
         fit_reason = f"image-heavy route met target at full image resolution and JPEG quality {best_quality}"
 
+    result_reasons = [
+        fit_reason,
+        "each candidate was rebuilt from the original PDF; lossy recompression was not cumulative",
+        "page count, media boxes, and rotation were verified before accepting the output",
+    ]
+    if best_scale < 1.0 and removable_opaque_smask_refs:
+        result_reasons.append(
+            f"removed {len(removable_opaque_smask_refs)} redundant fully opaque /SMask reference(s) before downsampling"
+        )
+
     return ImageFitResult(
         status=ImageFitStatus.FITTED,
         input_path=str(input_path), output_path=str(output_path),
         input_size_bytes=input_size, output_size_bytes=final_size,
         target_bytes=target_bytes, selected_quality=best_quality,
         images_replaced=best_replaced, attempts=tuple(attempts),
-        reasons=(
-            fit_reason,
-            "each candidate was rebuilt from the original PDF; lossy recompression was not cumulative",
-            "page count, media boxes, and rotation were verified before accepting the output",
-        ),
+        reasons=tuple(result_reasons),
         selected_scale=best_scale,
     )
