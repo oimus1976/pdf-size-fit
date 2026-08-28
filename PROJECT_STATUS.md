@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-08-27
+Last updated: 2026-08-28
 
 ## Current phase
 
@@ -55,15 +55,17 @@ The route-specific execution PoC now:
 - fails closed on explicitly unsupported or unknown image dictionary semantics,
 - starts at full image resolution and JPEG quality 100,
 - exhausts the configured full-resolution JPEG-quality range before considering downsampling,
-- keeps downsampling disabled by default (`min_scale=1.0`) until the destructive fallback has representative visual validation,
+- keeps downsampling disabled by default (`min_scale=1.0`) and requires explicit opt-in,
 - when explicitly enabled, scans 99%, 98%, 97% ... down to the configured scale floor at the minimum JPEG quality and selects the first fitting scale,
 - uses ceiling pixel rounding so integer dimensions do not cross the configured relative scale floor,
 - then raises JPEG quality at that scale as far as the current quality search permits,
 - rebuilds every trial from the original input so lossy recompression does not accumulate,
+- permits removal during downsampling only for a redundant `/SMask` proven fully opaque by source preflight and writer-side revalidation, without assuming reader/writer indirect object IDs remain equal,
+- continues to refuse general or transparency-bearing `/SMask` images and fails closed if writer-side revalidation fails,
 - verifies page count, page boxes, rotation, and final byte size before accepting output,
 - refuses to overwrite either the source or a pre-existing destination.
 
-The previously merged structure suite has **17 passing tests**. The first downsampling branch head was validated on the new Windows host with Python 3.14.1 at **23 passed**, and GitHub Actions passed on Python 3.11 and 3.12. An adversarial review then tightened the policy: opt-in downsampling, ceiling pixel rounding, and descending percent-scale search. New regression tests were added for those fixes; the revised head still requires fresh local and CI validation before Ready/merge.
+The revised branch has **29 passing tests** on DELL-G15 / Python 3.12.10 and NucBox9 / Python 3.14.1. GitHub Actions run #31 succeeded on Python 3.11 and 3.12. Coverage includes `test_downsampling_allows_opaque_smask_after_writer_renumbers_image_ref`, which reproduces reader/writer indirect object-ID renumbering and confirms that downsampling eligibility does not depend on ID identity.
 
 Previously validated structure cases remain:
 
@@ -73,7 +75,9 @@ Previously validated structure cases remain:
 - an embedded file and its bytes are preserved,
 - a PDF carrying standard PDF/A XMP identification metadata is rejected with `pdf-a-unsupported` and no output file.
 
-The real-world image-heavy sample remains 10,478,354 -> 7,573,276 bytes at full resolution and JPEG quality 100. The new downsampling stage is therefore a fallback for harder image-heavy inputs, not a change to that sample's selected result.
+The real-world image-heavy sample remains 10,478,354 -> 7,573,276 bytes at full resolution and JPEG quality 100 for the ordinary 10,000,000-byte target. For forced-fallback validation, the same 11-page sample used a 1,000,000-byte target, `min_quality=70`, and `min_scale=0.50`; it produced 985,422 bytes at selected scale 0.83 / quality 70, replaced 11 images, and removed 11 redundant fully opaque `/SMask` references. The tested boundary candidates at 84% / quality 70 (1,001,273 bytes) and 83% / quality 71 (1,000,986 bytes) both exceeded the target, supporting the current search policy's selection for this sample.
+
+PDFium rendering through pypdfium2 4.30.0 completed on every source/output page at scale 1, rotation 0, crop 0, RGB, and 1376x768. Sample-specific results were: maximum page MAE 3.699295714228036 (page 7), maximum channel difference 135 (page 8), minimum PSNR 28.72845447939584 dB (page 7), global MAE 3.104882141500396, and global PSNR 29.99111734310301 dB. Visual review observed more edge mosquito noise, while small text remained readable; the output was considered acceptable for this sample's approval-attachment use. This does not establish general quality or justify default downsampling. Larger pixel differences than the earlier full-resolution/quality-100 comparison are expected and should not be used as a simple cross-test quality guarantee.
 
 ## Current design direction
 
@@ -82,6 +86,7 @@ The real-world image-heavy sample remains 10,478,354 -> 7,573,276 bytes at full 
 - Prefer the least destructive route likely to satisfy the target.
 - Stop as soon as the target is met; do not optimize for the smallest possible output.
 - Preserve the original input unchanged.
+- Do not automatically delete the input, replace it with compressed output, or create an unsolicited backup copy.
 - Keep processing offline with no runtime downloads or required network access.
 - Fail closed when routing evidence is insufficient.
 - Bias color detection toward false-color rather than false-monochrome results because the latter could destroy information during 1-bit conversion.
@@ -92,25 +97,26 @@ The real-world image-heavy sample remains 10,478,354 -> 7,573,276 bytes at full 
 - Treat relative scale as a PoC control, not an effective-DPI or readability guarantee.
 - Treat the current resolution-first scale/quality ordering as a provisional policy rather than a perceptual-quality optimum.
 
-## Next milestone
+## PR #4 Ready evidence
 
-Before treating PR #4 as Ready:
+The four branch-readiness items are complete:
 
-1. validate the revised safety-fix head locally and in CI,
-2. force a representative real/image-like PDF through the downsampling path with an intentionally tighter byte target,
-3. compare before/after rendering at fixed conditions and inspect readability/visual degradation,
-4. record that evidence without turning it into a general quality guarantee.
+1. the revised safety-fix head passed 29 tests in both recorded local environments and CI on Python 3.11/3.12,
+2. a representative real-world image-heavy PDF was forced through downsampling with an intentionally tighter byte target,
+3. all pages were compared at fixed rendering conditions and visually inspected for readability/degradation,
+4. the sample-specific evidence is recorded without treating it as a product-wide quality guarantee.
 
 Remaining compatibility priorities include:
 
 1. additional valid color spaces and bit depths,
 2. color-key masks and more transparency combinations,
-3. synchronized `/SMask` downsampling if it is worth supporting,
+3. synchronized downsampling for general or transparency-bearing `/SMask` images if it is worth supporting,
 4. optional-content and unusual image dictionary combinations,
 5. rotated/mixed-size pages,
 6. long-document and memory behavior,
 7. image-specific/downsampling-by-contribution strategies so low-value size contributors such as small logos or codes are not degraded unnecessarily,
 8. a deliberate decision on whether PDF/A support requires an external/local conformance validator.
+9. official-record/original-preservation UX and deployment rules, including clear irreversible-output messaging and organization-specific decisions about originals, authoritative records, storage, and retention.
 
 ## Not decided yet
 
@@ -124,3 +130,4 @@ Remaining compatibility priorities include:
 - Whether the private pypdf raw-stream access should be removed before or during writer-stack selection
 - Production defaults for minimum JPEG quality and any automatic downsampling policy
 - Whether effective DPI or other content-aware limits should replace a simple relative `min_scale` in production
+- How each adopting organization's document-management and electronic-approval rules treat originals, compressed attachments, authoritative records, and retention duties
