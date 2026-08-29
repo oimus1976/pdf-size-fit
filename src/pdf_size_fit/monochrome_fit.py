@@ -31,6 +31,20 @@ PREFLIGHT_DPI = 72
 MIDTONE_MIN = 33
 MIDTONE_MAX = 246
 MAX_MIDTONE_FRACTION = 0.01
+ALLOWED_CATALOG_KEYS = frozenset({"/Type", "/Pages"})
+ALLOWED_PAGE_KEYS = frozenset(
+    {
+        "/Type",
+        "/Parent",
+        "/Resources",
+        "/MediaBox",
+        "/CropBox",
+        "/Contents",
+        "/Rotate",
+        "/UserUnit",
+        "/Annots",
+    }
+)
 
 
 class MonochromeFitStatus(str, Enum):
@@ -183,6 +197,15 @@ def _read_page_specs(reader: PdfReader) -> tuple[tuple[_PageSpec, ...] | None, s
         if "/AF" in page:
             return None, f"page {index} contains associated files"
 
+        unsupported_page_keys = sorted(
+            str(key) for key in page.keys() if key not in ALLOWED_PAGE_KEYS
+        )
+        if unsupported_page_keys:
+            return None, (
+                f"page {index} contains unsupported dictionary keys that are not "
+                "reconstructed: " + ", ".join(unsupported_page_keys)
+            )
+
         specs.append(_PageSpec(box, rotation))
     return tuple(specs), None
 
@@ -211,6 +234,8 @@ def _preflight(reader: PdfReader) -> tuple[tuple[_PageSpec, ...] | None, str | N
         return None, "PDF contains a signature field or certification-permissions structure"
     if isinstance(fields, (ArrayObject, list)) and fields:
         return None, "PDF contains AcroForm fields that whole-page rasterization would discard"
+    if "/AcroForm" in root:
+        return None, "PDF contains an AcroForm structure that is not preserved"
 
     names = _resolve(root.get("/Names"))
     if names is not None and not isinstance(names, DictionaryObject):
@@ -238,6 +263,15 @@ def _preflight(reader: PdfReader) -> tuple[tuple[_PageSpec, ...] | None, str | N
         )
     if isinstance(names, DictionaryObject) and names:
         return None, "PDF contains named document-level semantics that are not preserved"
+
+    unsupported_catalog_keys = sorted(
+        str(key) for key in root.keys() if key not in ALLOWED_CATALOG_KEYS
+    )
+    if unsupported_catalog_keys:
+        return None, (
+            "PDF catalog contains unsupported keys that are not reconstructed: "
+            + ", ".join(unsupported_catalog_keys)
+        )
 
     return _read_page_specs(reader)
 

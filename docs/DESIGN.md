@@ -107,16 +107,17 @@ Fixed-condition PDFium rendering via pypdfium2 4.30.0 completed for all 11 sourc
 Current PoC execution boundary:
 
 1. Return `skip` without writing output when the source is already at or below the target.
-2. Before any diagnosis or execution rendering, reject encryption, signature/certification structures, AcroForm fields, embedded or associated files, annotations, PDF/A identification, outlines/bookmarks and unsupported document-level navigation semantics.
+2. Before any diagnosis or execution rendering, reject encryption, signature/certification structures, any AcroForm presence, embedded or associated files, annotations, PDF/A identification, outlines/bookmarks and unsupported document-level navigation semantics.
 3. Reject page geometry that cannot be reproduced safely, including invalid dimensions/rotation, a CropBox different from the MediaBox, additional page boxes, and a non-default UserUnit.
-4. Refuse any page whose pypdf `extract_text()` result contains non-whitespace text, or whose text inspection cannot be completed reliably, because whole-page rasterization would remove search/copy semantics.
-5. Render every page with PDFium at 72 dpi, with annotations disabled and the same rotation compensation used for execution, and inspect the 8-bit grayscale image before thresholding. Pixels with luminance 33 through 246 are midtones; refuse when any page exceeds 1% midtone pixels or when rendering/inspection cannot be completed reliably.
-6. Require the existing diagnosis to return `vector-monochrome` for the same byte target. Execution does not make an independent monochrome guess.
-7. Render every page with PDFium at exactly 300 dpi, compensating for the source page rotation while creating the image so the reconstructed page can retain the original `/Rotate` value.
-8. Convert each render to 1-bit monochrome and require a `/CCITTFaxDecode` image with Group 4 `/K -1` parameters.
-9. Rebuild each page as one image while retaining its exact MediaBox dimensions and rotation.
-10. Reopen and verify page count, MediaBox dimensions, rotation, image encoding and final byte size before accepting the candidate.
-11. Copy an accepted candidate from temporary storage by exclusively creating the destination; never overwrite the source or an existing output.
+4. Apply strict dictionary allowlists after the specific refusals: the catalog may contain only `/Type` and `/Pages`; page dictionaries may contain only `/Type`, `/Parent`, `/Resources`, `/MediaBox`, `/CropBox`, `/Contents`, `/Rotate`, `/UserUnit`, and `/Annots`, subject to the earlier value checks. Reject all other known or unknown keys rather than silently dropping semantics the rebuilt PDF does not preserve.
+5. Refuse any page whose pypdf `extract_text()` result contains non-whitespace text, or whose text inspection cannot be completed reliably, because whole-page rasterization would remove search/copy semantics.
+6. Render every page with PDFium at 72 dpi, with annotations disabled and the same rotation compensation used for execution, and inspect the 8-bit grayscale image before thresholding. Pixels with luminance 33 through 246 are midtones; refuse when any page exceeds 1% midtone pixels or when rendering/inspection cannot be completed reliably.
+7. Require the existing diagnosis to return `vector-monochrome` for the same byte target. Execution does not make an independent monochrome guess.
+8. Render every page with PDFium at exactly 300 dpi, compensating for the source page rotation while creating the image so the reconstructed page can retain the original `/Rotate` value.
+9. Convert each render to 1-bit monochrome and require a `/CCITTFaxDecode` image with Group 4 `/K -1` parameters.
+10. Rebuild each page as one image while retaining its exact MediaBox dimensions and rotation.
+11. Reopen and verify page count, MediaBox dimensions, rotation, image encoding and final byte size before accepting the candidate.
+12. Copy an accepted candidate from temporary storage by exclusively creating the destination; never overwrite the source or an existing output.
 
 There is deliberately no DPI search. If the fixed 300-dpi candidate exceeds the target, the route returns `target-not-met` and writes no output. Lower-DPI behavior requires separate quality validation.
 

@@ -81,6 +81,12 @@ def _generate_gray_vector_pdf(path: Path) -> None:
         writer.write(output)
 
 
+def _non_pdfa_metadata() -> DecodedStreamObject:
+    metadata = DecodedStreamObject()
+    metadata.set_data(b"<metadata>synthetic non-PDF/A metadata</metadata>")
+    return metadata
+
+
 def _rewrite(source: Path, destination: Path, mutate) -> None:
     writer = PdfWriter(clone_from=str(source))
     mutate(writer)
@@ -326,6 +332,79 @@ def test_page_count_size_and_rotation_are_preserved(tmp_path: Path) -> None:
     ],
 )
 def test_fail_closed_safety_refusals(
+    tmp_path: Path,
+    fixture_name: str,
+    mutate,
+    reason_fragment: str,
+) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / fixture_name
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_vector_pdf(base)
+    _rewrite(base, source, mutate)
+
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert reason_fragment in result.reasons[0]
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "mutate", "reason_fragment"),
+    [
+        (
+            "catalog-lang.pdf",
+            lambda writer: writer.root_object.__setitem__(
+                NameObject("/Lang"), TextStringObject("en-US")
+            ),
+            "/Lang",
+        ),
+        (
+            "catalog-metadata.pdf",
+            lambda writer: writer.root_object.__setitem__(
+                NameObject("/Metadata"), writer._add_object(_non_pdfa_metadata())
+            ),
+            "/Metadata",
+        ),
+        (
+            "empty-acroform.pdf",
+            lambda writer: writer.root_object.__setitem__(
+                NameObject("/AcroForm"), DictionaryObject()
+            ),
+            "AcroForm structure",
+        ),
+        (
+            "page-struct-parents.pdf",
+            lambda writer: writer.pages[0].__setitem__(
+                NameObject("/StructParents"), NumberObject(0)
+            ),
+            "/StructParents",
+        ),
+        (
+            "page-group.pdf",
+            lambda writer: writer.pages[0].__setitem__(
+                NameObject("/Group"), DictionaryObject()
+            ),
+            "/Group",
+        ),
+        (
+            "custom-catalog-key.pdf",
+            lambda writer: writer.root_object.__setitem__(
+                NameObject("/CustomCatalogSemantics"), NumberObject(1)
+            ),
+            "/CustomCatalogSemantics",
+        ),
+        (
+            "custom-page-key.pdf",
+            lambda writer: writer.pages[0].__setitem__(
+                NameObject("/CustomPageSemantics"), NumberObject(1)
+            ),
+            "/CustomPageSemantics",
+        ),
+    ],
+)
+def test_fit_refuses_unreconstructed_catalog_and_page_semantics(
     tmp_path: Path,
     fixture_name: str,
     mutate,
