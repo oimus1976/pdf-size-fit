@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-08-28
+Last updated: 2026-08-29
 
 ## Current phase
 
@@ -61,11 +61,12 @@ The route-specific execution PoC now:
 - then raises JPEG quality at that scale as far as the current quality search permits,
 - rebuilds every trial from the original input so lossy recompression does not accumulate,
 - permits removal during downsampling only for a redundant `/SMask` proven fully opaque by source preflight and writer-side revalidation, without assuming reader/writer indirect object IDs remain equal,
+- applies a strict soft-mask dictionary allowlist before treating a fully opaque `/SMask` as redundant; `/OC`, `/Metadata`, and unknown keys fail closed,
 - continues to refuse general or transparency-bearing `/SMask` images and fails closed if writer-side revalidation fails,
 - verifies page count, page boxes, rotation, and final byte size before accepting output,
 - refuses to overwrite either the source or a pre-existing destination.
 
-The revised branch has **29 passing tests** on DELL-G15 / Python 3.12.10 and NucBox9 / Python 3.14.1. GitHub Actions run #31 succeeded on Python 3.11 and 3.12. Coverage includes `test_downsampling_allows_opaque_smask_after_writer_renumbers_image_ref`, which reproduces reader/writer indirect object-ID renumbering and confirms that downsampling eligibility does not depend on ID identity.
+The current head has **31 passing tests** in the dedicated supported local venv, and GitHub Actions run #33 succeeded on Python 3.11 and 3.12. The system Python version on NucBox9 is 3.14.1, but that is not the runtime used for the recorded supported-environment validation. Coverage includes reader/writer indirect object-ID renumbering plus fail-closed regression cases for optional-content and unknown soft-mask dictionary keys.
 
 Previously validated structure cases remain:
 
@@ -75,9 +76,9 @@ Previously validated structure cases remain:
 - an embedded file and its bytes are preserved,
 - a PDF carrying standard PDF/A XMP identification metadata is rejected with `pdf-a-unsupported` and no output file.
 
-The real-world image-heavy sample remains 10,478,354 -> 7,573,276 bytes at full resolution and JPEG quality 100 for the ordinary 10,000,000-byte target. For forced-fallback validation, the same 11-page sample used a 1,000,000-byte target, `min_quality=70`, and `min_scale=0.50`; it produced 985,422 bytes at selected scale 0.83 / quality 70, replaced 11 images, and removed 11 redundant fully opaque `/SMask` references. The tested boundary candidates at 84% / quality 70 (1,001,273 bytes) and 83% / quality 71 (1,000,986 bytes) both exceeded the target, supporting the current search policy's selection for this sample.
+The real-world image-heavy sample remains 10,478,354 -> 7,573,276 bytes at full resolution and JPEG quality 100 for the ordinary 10,000,000-byte target. For forced-fallback validation, the same 11-page sample used a 1,000,000-byte target, `min_quality=70`, and `min_scale=0.50`; it produced 985,422 bytes at selected scale 0.83 / quality 70, replaced 11 images, and removed 11 redundant fully opaque `/SMask` references. After the stricter soft-mask allowlist fix, the same private sample reproduced the same 985,422-byte / 0.83 / quality-70 result exactly. The tested boundary candidates at 84% / quality 70 (1,001,273 bytes) and 83% / quality 71 (1,000,986 bytes) both exceeded the target.
 
-PDFium rendering through pypdfium2 4.30.0 completed on every source/output page at scale 1, rotation 0, crop 0, RGB, and 1376x768. Sample-specific results were: maximum page MAE 3.699295714228036 (page 7), maximum channel difference 135 (page 8), minimum PSNR 28.72845447939584 dB (page 7), global MAE 3.104882141500396, and global PSNR 29.99111734310301 dB. Visual review observed more edge mosquito noise, while small text remained readable; the output was considered acceptable for this sample's approval-attachment use. This does not establish general quality or justify default downsampling. Larger pixel differences than the earlier full-resolution/quality-100 comparison are expected and should not be used as a simple cross-test quality guarantee.
+PDFium rendering through pypdfium2 4.30.0 completed on every source/output page at scale 1, rotation 0, crop 0, RGB, and 1376x768. Sample-specific results were: maximum page MAE 3.699295714228036 (page 7), maximum channel difference 135 (page 8), minimum PSNR 28.72845447939584 dB (page 7), global MAE 3.104882141500396, and global PSNR 29.99111734310301 dB. Visual review observed more edge mosquito noise, while small text remained readable; the output was considered acceptable for this sample's approval-attachment use. This does not establish general quality or justify default downsampling.
 
 ## Current design direction
 
@@ -99,12 +100,13 @@ PDFium rendering through pypdfium2 4.30.0 completed on every source/output page 
 
 ## PR #4 Ready evidence
 
-The four branch-readiness items are complete:
+The branch-readiness evidence is complete for the current head:
 
-1. the revised safety-fix head passed 29 tests in both recorded local environments and CI on Python 3.11/3.12,
+1. the current safety-fix head passed 31 tests in the dedicated supported local venv and CI on Python 3.11/3.12,
 2. a representative real-world image-heavy PDF was forced through downsampling with an intentionally tighter byte target,
 3. all pages were compared at fixed rendering conditions and visually inspected for readability/degradation,
-4. the sample-specific evidence is recorded without treating it as a product-wide quality guarantee.
+4. the sample-specific evidence is recorded without treating it as a product-wide quality guarantee,
+5. the stricter opaque-soft-mask allowlist fix reproduced the same representative output and boundary result.
 
 Remaining compatibility priorities include:
 
@@ -115,7 +117,7 @@ Remaining compatibility priorities include:
 5. rotated/mixed-size pages,
 6. long-document and memory behavior,
 7. image-specific/downsampling-by-contribution strategies so low-value size contributors such as small logos or codes are not degraded unnecessarily,
-8. a deliberate decision on whether PDF/A support requires an external/local conformance validator.
+8. a deliberate decision on whether PDF/A support requires an external/local conformance validator,
 9. official-record/original-preservation UX and deployment rules, including clear irreversible-output messaging and organization-specific decisions about originals, authoritative records, storage, and retention.
 
 ## Not decided yet
