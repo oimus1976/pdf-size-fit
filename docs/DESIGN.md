@@ -104,15 +104,21 @@ Fixed-condition PDFium rendering via pypdfium2 4.30.0 completed for all 11 sourc
 
 ## Route B: monochrome abnormal vector/outline PDFs
 
-Working hypothesis:
+Current PoC execution boundary:
 
-- Detect PDFs where image streams do not explain the size but page content streams are unusually large.
-- Confirm that rendered pages are effectively monochrome.
-- Render with PDFium at a high-enough resolution.
-- Convert to 1-bit and encode image XObjects with `/CCITTFaxDecode` Group 4 settings.
-- Prefer higher DPI when it already satisfies the target.
+1. Return `skip` without writing output when the source is already at or below the target.
+2. Before any diagnosis or execution rendering, reject encryption, signature/certification structures, AcroForm fields, embedded or associated files, annotations, PDF/A identification, outlines/bookmarks and unsupported document-level navigation semantics.
+3. Reject page geometry that cannot be reproduced safely, including invalid dimensions/rotation, a CropBox different from the MediaBox, additional page boxes, and a non-default UserUnit.
+4. Require the existing diagnosis to return `vector-monochrome` for the same byte target. Execution does not make an independent monochrome guess.
+5. Render every page with PDFium at exactly 300 dpi, compensating for the source page rotation while creating the image so the reconstructed page can retain the original `/Rotate` value.
+6. Convert each render to 1-bit monochrome and require a `/CCITTFaxDecode` image with Group 4 `/K -1` parameters.
+7. Rebuild each page as one image while retaining its exact MediaBox dimensions and rotation.
+8. Reopen and verify page count, MediaBox dimensions, rotation, image encoding and final byte size before accepting the candidate.
+9. Copy an accepted candidate from temporary storage by exclusively creating the destination; never overwrite the source or an existing output.
 
-This route intentionally sacrifices text search/copy and vector scalability, so it should be treated as a fallback for PDFs whose existing representation is pathologically large.
+There is deliberately no DPI search. If the fixed 300-dpi candidate exceeds the target, the route returns `target-not-met` and writes no output. Lower-DPI behavior requires separate quality validation.
+
+This route intentionally sacrifices text search/copy and vector scalability. The safety gate refuses semantics whose preservation has not been demonstrated rather than silently flattening or discarding them. Extractable text by itself is not a refusal criterion because incidental text may coexist with the abnormal-vector representation this route is designed to handle.
 
 ## Route C: color abnormal vector/outline PDFs
 

@@ -87,6 +87,21 @@ The downsampling fallback remains behind an explicit opt-in gate. The current he
 
 Compression is irreversible. The tool does not overwrite or automatically delete the input, and users may need to retain the original according to their organization's document-management rules. A future GUI should not offer a post-success "replace/delete original" shortcut, nor should the tool create an unsolicited backup copy that could unnecessarily duplicate sensitive or official records.
 
+## Monochrome vector fitting PoC
+
+The monochrome vector route is deliberately limited to the validated fixed-condition experiment:
+
+```powershell
+pdf-size-fit-monochrome .\oversize.pdf .\oversize-fit.pdf `
+  --target-bytes 10000000
+```
+
+It runs only when the existing diagnosis selects `vector-monochrome` for the same target. Every page is rendered by PDFium at exactly 300 dpi, converted to 1-bit monochrome, and encoded with CCITT Group 4. There is no DPI search: if that one candidate exceeds the target, the route returns `target-not-met` and writes no output. `--dpi` exists only to make the fixed condition explicit; values other than 300 are rejected.
+
+Whole-page rasterization destroys selectable text, vector scalability, and unsupported interactive/document semantics. The route therefore fails closed before diagnosis rendering when it finds encryption, signatures or certification permissions, AcroForm fields, embedded/associated files, annotations, PDF/A identification, outlines/bookmarks or other document-level navigation semantics, non-default user units, or page geometry it cannot reproduce safely. It preserves page count, MediaBox dimensions, and rotation, verifies the 1-bit CCITT G4 output with pypdf, and never overwrites the input or an existing destination.
+
+Only synthetic fixtures are included in the regression suite. Private municipal PDFs remain outside the repository and are reserved for the separate real-file validation gate.
+
 ## Project stage
 
 This repository currently records experiments and design decisions. Backend libraries, license, packaging method, GUI, and release policy are **not yet finalized**.

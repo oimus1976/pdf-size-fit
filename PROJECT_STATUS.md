@@ -42,6 +42,14 @@ Validated against the current representative samples with a 10,000,000-byte targ
 
 The classifier also provides `unclassified` and does not guess a destructive route when no current threshold is met.
 
+## Monochrome vector compression execution PoC
+
+The route-specific execution PoC now reproduces only the validated fixed condition: PDFium rendering at 300 dpi, 1-bit monochrome conversion, and CCITT Group 4 encoding. It requires the existing diagnosis to select `vector-monochrome` for the same target and does not search DPI. A 300-dpi candidate that remains above the target returns `target-not-met` without an output file.
+
+Because this is destructive whole-page rasterization, a preflight gate runs before diagnosis rendering. It refuses encryption, signatures/certification permissions, AcroForm fields, embedded/associated files, annotations, PDF/A identification, outlines/bookmarks and unsupported document-level navigation semantics. It also refuses page geometry outside the currently proven boundary. Accepted output is reopened and checked for page count, MediaBox dimensions, rotation, 1-bit CCITT encoding, and target size before an exclusively created destination is retained.
+
+Synthetic fixtures cover the route and its refusal boundary without placing private municipal documents in the repository. The existing private 47-page sample remains a separate real-file validation gate, including representative small-text visual inspection; the earlier 2,215,863-byte result is comparison evidence rather than a byte-for-byte golden artifact.
+
 ## Image-heavy compression execution PoC
 
 The route-specific execution PoC now:

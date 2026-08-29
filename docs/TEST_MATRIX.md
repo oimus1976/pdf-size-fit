@@ -93,6 +93,8 @@ The original real-world source was roughly 35.9 MB. The measured CCITT PoC above
 
 The document contained almost no embedded raster images; the size was dominated by page content representing text as vector outlines. Normal image-oriented PDF compression did not address the dominant contributor.
 
+The fixed 300-dpi execution route now has synthetic regression cases for successful 1-bit CCITT Group 4 reconstruction, source immutability, destination non-overwrite, skip and route-mismatch outcomes, explicit `target-not-met`, page-count/MediaBox/rotation preservation, and refusal of signatures/certification structures, AcroForm fields, embedded files, annotations, PDF/A identification, encryption, outlines/bookmarks, unsupported crop geometry, and invalid rotation. These synthetic cases do not replace the private T01 visual-validation gate, and no private municipal PDF is stored in the repository.
+
 ## T02 notes
 
 The 11-page input consisted almost entirely of raster image data. The image stream total accounted for more than 99% of the PDF size in the PoC diagnosis. This is the key counterexample to T01: the least destructive useful operation is image recompression, not whole-page rasterization.
