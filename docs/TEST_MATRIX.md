@@ -61,9 +61,11 @@ The downsampling-fallback branch adds regression cases for:
 7. downsampling remaining disabled when the caller accepts the default arguments,
 8. ceiling pixel rounding preserving the requested relative scale floor even for very small images,
 9. exhaustive descending percent-scale search selecting the largest fitting integer-percent scale at the configured minimum JPEG quality,
-10. reader/writer indirect object-ID renumbering via `test_downsampling_allows_opaque_smask_after_writer_renumbers_image_ref`, including writer-side `/SMask` revalidation rather than ID-based matching.
+10. reader/writer indirect object-ID renumbering via `test_downsampling_allows_opaque_smask_after_writer_renumbers_image_ref`, including writer-side `/SMask` revalidation rather than ID-based matching,
+11. fail-closed refusal when a fully opaque soft mask carries `/OC`,
+12. fail-closed refusal when a fully opaque soft mask carries an unknown dictionary key.
 
-The revised branch was validated at **`29 passed`** on DELL-G15 / Python 3.12.10 and NucBox9 / Python 3.14.1. GitHub Actions run #31 succeeded on Python 3.11 and 3.12.
+The current head was validated at **`31 passed`** in the dedicated supported local venv. GitHub Actions run #33 succeeded on Python 3.11 and 3.12 for the safety-fix code head. The NucBox9 system Python is 3.14.1, but the recorded local validation did not use that system interpreter.
 
 The downsampling search is resolution-first and deliberately conservative. After full-resolution quality search fails, downsampling remains off unless the caller explicitly sets `min_scale < 1.0`. When enabled, the current PoC checks 99%, 98%, 97% ... downward at the minimum JPEG quality and chooses the first fitting scale, then searches JPEG quality at that scale. Candidate PDFs are always rebuilt from the original input.
 
@@ -73,9 +75,9 @@ The shared-Form fixture confirmed that one nested image reused across two pages 
 
 For T02b, the real-world image-heavy sample was rendered with PDFium before and after the structure-preserving quality-100 replacement. Across all 11 pages at render scale 1, the observed page-wise maximum MAE was about 0.098, maximum channel difference was 4, and minimum PSNR was about 56.9 dB. These numbers are sample-specific evidence only. That sample already fits at full resolution, so it does not validate the new downsampling fallback.
 
-For T02c, the boundary checks were 84% / quality 70 at 1,001,273 bytes (over target), 83% / quality 71 at 1,000,986 bytes (over target), and 83% / quality 70 at 985,422 bytes (fitted). This is sample-specific evidence that the current resolution-first search selected the expected tested boundary.
+For T02c, the boundary checks were 84% / quality 70 at 1,001,273 bytes (over target), 83% / quality 71 at 1,000,986 bytes (over target), and 83% / quality 70 at 985,422 bytes (fitted). After the stricter soft-mask dictionary allowlist fix, the representative private sample reproduced the same selected result exactly: 985,422 bytes at scale 0.83 / quality 70, 11 images replaced, and 11 redundant fully opaque `/SMask` references removed.
 
-T02c source and output were rendered with PDFium via pypdfium2 4.30.0 using fixed conditions: scale 1, rotation 0, crop 0, RGB, all 11 pages, and 1376x768 for both versions. Every page rendered successfully. Aggregate comparison results were:
+T02c source and output were rendered with PDFium via pypdfium2 4.30.0 using fixed conditions: scale 1, rotation 0, crop `(0,0,0,0)`, RGB, all 11 pages, and 1376x768 for both versions. Every page rendered successfully. Aggregate comparison results were:
 
 - maximum page MAE: 3.699295714228036 (page 7),
 - maximum channel difference: 135 (page 8),
@@ -83,7 +85,7 @@ T02c source and output were rendered with PDFium via pypdfium2 4.30.0 using fixe
 - global MAE: 3.104882141500396,
 - global PSNR: 29.99111734310301 dB.
 
-Visual review found increased mosquito noise around edges, while small text remained readable. The result was considered acceptable for this sample's approval-attachment use. These observations are specific to this sample, render setup, and use; they are not a general quality guarantee. The larger differences than the earlier full-resolution/quality-100 comparison are expected and should not be compared as if they established a universal quality level.
+Visual review found increased mosquito noise around edges, while small text remained readable. The result was considered acceptable for this sample's approval-attachment use. These observations are specific to this sample, render setup, and use; they are not a general quality guarantee.
 
 ## T01 notes
 
@@ -121,7 +123,7 @@ It exists to validate routing and the color-vector fallback without placing real
 
 ## Completed PR #4 readiness validation
 
-The revised 29-test suite passed in both recorded local environments and CI, a representative real-world image-heavy PDF was forced through the fallback, and fixed-condition rendering plus visual inspection was completed and recorded above. These satisfy the four recorded Ready conditions for PR #4, not product readiness.
+The current 31-test suite passed in the dedicated supported local venv, CI passed on Python 3.11/3.12 for the safety-fix code head, a representative real-world image-heavy PDF was forced through the fallback, and fixed-condition rendering plus visual inspection was completed and recorded above. The stricter soft-mask allowlist fix also reproduced the same representative result. These satisfy the recorded Ready conditions for PR #4, not product readiness.
 
 ## Missing coverage
 
@@ -130,7 +132,7 @@ The current evidence remains intentionally narrow and should add coverage for at
 - additional color spaces and bit depths,
 - color-key masks and additional transparency combinations,
 - synchronized downsampling of general or transparency-bearing `/SMask` images if supported,
-- optional-content and unusual image dictionary combinations,
+- optional-content and unusual image dictionary combinations beyond the current refusal tests,
 - rotated/mixed-size pages,
 - very long PDFs and memory limits,
 - image-specific size-contribution/downsampling decisions,
