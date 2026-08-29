@@ -69,6 +69,7 @@ The PoC currently:
 - records both image scale and JPEG quality for each attempt,
 - preserves supported image dictionary semantics such as a compatible `/SMask` at full resolution,
 - when downsampling, removes a redundant `/SMask` only if it can prove that the mask is fully opaque, using source-side preflight and writer-side revalidation that does not depend on indirect object IDs remaining stable,
+- applies a strict soft-mask dictionary allowlist before removing a fully opaque `/SMask`; optional-content, metadata, and unknown semantics fail closed,
 - refuses to downsample images with any other `/SMask`, including masks that contain transparency,
 - handles shared images nested inside reusable Form XObjects in the current synthetic coverage,
 - verifies page count, page boxes, and rotation before accepting output,
@@ -82,7 +83,7 @@ The PoC currently:
 
 Synthetic preservation tests currently cover a bookmark, a basic AcroForm field/value, and an embedded file in addition to the image-specific cases. This is still narrow PoC coverage, not a broad PDF compatibility claim.
 
-The downsampling fallback remains behind an explicit opt-in gate. The revised branch has 29 passing tests on the recorded local environments, passes CI on Python 3.11 and 3.12, and has completed the representative fixed-condition comparison described above.
+The downsampling fallback remains behind an explicit opt-in gate. The current head has 31 passing tests in the dedicated supported local venv, and GitHub Actions run #33 passed on Python 3.11 and 3.12 before the subsequent documentation-only refresh. The representative forced-downsampling result was reproduced exactly after the stricter soft-mask allowlist fix.
 
 Compression is irreversible. The tool does not overwrite or automatically delete the input, and users may need to retain the original according to their organization's document-management rules. A future GUI should not offer a post-success "replace/delete original" shortcut, nor should the tool create an unsolicited backup copy that could unnecessarily duplicate sensitive or official records.
 
