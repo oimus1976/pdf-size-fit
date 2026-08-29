@@ -36,7 +36,8 @@ The project is currently experimental and does not yet use formal releases.
 - Regression coverage for explicit `target-not-met`, downsampling order, minimum-scale exhaustion, and soft-mask fail-closed behavior.
 - Additional adversarial-review regression coverage for default downsampling opt-in, pixel-dimension scale floors, and largest-fitting integer-percent scale selection.
 - Regression coverage for `PdfWriter(clone_from=...)` renumbering image indirect object IDs, confirming that opaque-soft-mask handling does not depend on reader/writer ID identity.
-- Recorded 29-test validation on Python 3.12.10 and 3.14.1, plus GitHub Actions success on Python 3.11 and 3.12.
+- Regression coverage ensuring fully opaque soft masks with `/OC` or unknown dictionary keys are not treated as safely removable.
+- Recorded 31-test validation in the dedicated supported local venv, plus GitHub Actions success on Python 3.11 and 3.12 for the safety-fix code head.
 - Sample-specific real-world forced-downsampling and fixed-condition render-validation evidence; detailed measurements are in `docs/TEST_MATRIX.md`.
 
 ### Changed
@@ -53,6 +54,7 @@ The project is currently experimental and does not yet use formal releases.
 - Downsampled pixel dimensions now use ceiling rounding so the requested relative scale floor is not crossed because of integer pixel rounding.
 - The fallback now scans integer-percent scales from 99% downward and selects the first fitting scale at the configured minimum JPEG quality instead of assuming file size is monotonic enough for binary search.
 - Downsampling may now remove a redundant `/SMask` only when source preflight and writer-side revalidation strictly prove that it is fully opaque; writer revalidation fails closed and does not assume cloned indirect object IDs remain stable.
+- Fully opaque soft masks are now accepted as removable only when their image dictionaries contain a strict allowlist of known-safe keys; optional-content, metadata, and unknown semantics fail closed.
 - Original-retention requirements now explicitly prohibit automatic input deletion or replacement and avoid unsolicited backup copies; compression is an irreversible derivative whose retention handling belongs to the adopting organization's document-management rules.
 
 ### Notes
@@ -62,6 +64,7 @@ The project is currently experimental and does not yet use formal releases.
 - Real municipal source documents used for local validation are intentionally excluded from the repository.
 - Image replacement remains deliberately conservative: unsupported masks, color spaces, bit depths, decoding structures, unknown image dictionary semantics, signed/certified PDFs, or PDF/A-identified PDFs return a fail-closed result rather than being rewritten silently.
 - Downsampling still refuses general or transparency-bearing `/SMask` images because the base image and mask are not resized in lockstep. Only a redundant soft mask strictly proven fully opaque may be removed for downsampling.
+- The NucBox9 system Python is 3.14.1, but the recorded supported local validation used a dedicated venv rather than that system interpreter.
 - `min_scale` is a relative source-pixel floor, not an effective-DPI or readability guarantee. The current fallback also applies one selected scale to all supported images in the document.
 - The resolution-first scale/quality policy is provisional and does not claim to maximize perceptual quality across different content types.
 - Whether a compressed electronic-approval attachment is an authoritative or retained record depends on the adopting organization's rules; the project does not generalize that it is always the original or legally controlling copy.
