@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pypdfium2
 import pytest
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import (
@@ -41,6 +42,41 @@ def _generate_vector_pdf(
         stream = DecodedStreamObject()
         stream.set_data(drawing)
         page.replace_contents(stream)
+    with path.open("wb") as output:
+        writer.write(output)
+
+
+def _generate_text_pdf(path: Path, text: str) -> None:
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=595, height=842)
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    page[NameObject("/Resources")] = DictionaryObject(
+        {
+            NameObject("/Font"): DictionaryObject(
+                {NameObject("/F1"): writer._add_object(font)}
+            )
+        }
+    )
+    stream = DecodedStreamObject()
+    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    stream.set_data(f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("ascii"))
+    page.replace_contents(stream)
+    with path.open("wb") as output:
+        writer.write(output)
+
+
+def _generate_gray_vector_pdf(path: Path) -> None:
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=595, height=842)
+    stream = DecodedStreamObject()
+    stream.set_data(b"0.5 g 0 0 595 842 re f")
+    page.replace_contents(stream)
     with path.open("wb") as output:
         writer.write(output)
 
@@ -123,6 +159,72 @@ def test_fit_requires_existing_vector_monochrome_diagnosis(tmp_path: Path) -> No
 
     assert result.status is MonochromeFitStatus.ROUTE_MISMATCH
     assert "vector-color" in result.reasons[0]
+    assert not output.exists()
+
+
+def test_fit_refuses_non_whitespace_extractable_text(tmp_path: Path) -> None:
+    source = tmp_path / "extractable-text.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_text_pdf(source, "searchable text")
+
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert "selectable/searchable text" in result.reasons[0]
+    assert not output.exists()
+
+
+def test_whitespace_extractable_text_does_not_by_itself_refuse(tmp_path: Path) -> None:
+    source = tmp_path / "whitespace-text.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_text_pdf(source, "   ")
+
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert "extractable text" not in result.reasons[0]
+    assert result.status is not MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert not output.exists()
+
+
+def test_fit_refuses_material_grayscale_midtone_content(tmp_path: Path) -> None:
+    source = tmp_path / "gray-vector.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_gray_vector_pdf(source)
+
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert "material grayscale/midtone content" in result.reasons[0]
+    assert not output.exists()
+
+
+def test_existing_black_white_vector_fixture_remains_eligible(tmp_path: Path) -> None:
+    source = tmp_path / "black-white-vector.pdf"
+    output = tmp_path / "output.pdf"
+    _generate_vector_pdf(source)
+
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
+
+    assert result.status is MonochromeFitStatus.FITTED
+    assert output.exists()
+
+
+def test_bilevel_render_failure_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_vector_pdf(source)
+
+    def fail_to_open(_path: str):
+        raise RuntimeError("synthetic PDFium failure")
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", fail_to_open)
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert "bilevel-suitability" in result.reasons[0]
     assert not output.exists()
 
 

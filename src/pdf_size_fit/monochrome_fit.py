@@ -27,6 +27,10 @@ from .diagnose import Route, diagnose_pdf
 
 
 FIXED_DPI = 300
+PREFLIGHT_DPI = 72
+MIDTONE_MIN = 33
+MIDTONE_MAX = 246
+MAX_MIDTONE_FRACTION = 0.01
 
 
 class MonochromeFitStatus(str, Enum):
@@ -238,6 +242,100 @@ def _preflight(reader: PdfReader) -> tuple[tuple[_PageSpec, ...] | None, str | N
     return _read_page_specs(reader)
 
 
+def _bilevel_suitability_refusal(
+    input_path: Path,
+    page_specs: tuple[_PageSpec, ...],
+) -> str | None:
+    try:
+        import pypdfium2 as pdfium
+
+        pdf = pdfium.PdfDocument(str(input_path))
+        try:
+            if len(pdf) != len(page_specs):
+                raise RuntimeError("PDFium and pypdf disagree on the source page count")
+            for index, spec in enumerate(page_specs, start=1):
+                source_page = pdf[index - 1]
+                bitmap = None
+                grayscale = None
+                try:
+                    normalized_rotation = spec.rotation % 360
+                    if source_page.get_rotation() != normalized_rotation:
+                        raise RuntimeError(
+                            f"page {index} rotation differs between PDF readers"
+                        )
+                    bitmap = source_page.render(
+                        scale=PREFLIGHT_DPI / 72.0,
+                        rotation=(-normalized_rotation) % 360,
+                        grayscale=True,
+                        draw_annots=False,
+                    )
+                    grayscale = bitmap.to_pil().convert("L")
+                    expected_size = (
+                        ceil(spec.width * PREFLIGHT_DPI / 72.0),
+                        ceil(spec.height * PREFLIGHT_DPI / 72.0),
+                    )
+                    if grayscale.size != expected_size:
+                        raise RuntimeError(
+                            f"page {index} rendered at {grayscale.size}, expected "
+                            f"{expected_size} at {PREFLIGHT_DPI} dpi"
+                        )
+                    histogram = grayscale.histogram()
+                    total_pixels = grayscale.width * grayscale.height
+                    if len(histogram) != 256 or total_pixels <= 0:
+                        raise RuntimeError(
+                            f"page {index} did not produce a valid 8-bit grayscale image"
+                        )
+                    midtone_pixels = sum(histogram[MIDTONE_MIN : MIDTONE_MAX + 1])
+                    midtone_fraction = midtone_pixels / total_pixels
+                    if midtone_fraction > MAX_MIDTONE_FRACTION:
+                        return (
+                            f"page {index} contains material grayscale/midtone content "
+                            f"({midtone_fraction:.3%} of pixels at luminance "
+                            f"{MIDTONE_MIN}..{MIDTONE_MAX}, above the "
+                            f"{MAX_MIDTONE_FRACTION:.1%} limit)"
+                        )
+                finally:
+                    if grayscale is not None:
+                        grayscale.close()
+                    if bitmap is not None:
+                        bitmap.close()
+                    source_page.close()
+        finally:
+            pdf.close()
+    except Exception as exc:
+        return (
+            "72 dpi bilevel-suitability rendering or inspection could not be "
+            f"completed reliably ({type(exc).__name__})"
+        )
+    return None
+
+
+def _destructive_content_refusal(
+    input_path: Path,
+    reader: PdfReader,
+    page_specs: tuple[_PageSpec, ...],
+) -> str | None:
+    for index, page in enumerate(reader.pages, start=1):
+        try:
+            extracted_text = page.extract_text()
+        except Exception as exc:
+            return (
+                f"page {index} extractable text could not be inspected reliably "
+                f"({type(exc).__name__})"
+            )
+        if not isinstance(extracted_text, str):
+            return (
+                f"page {index} extractable text did not return a reliable string result"
+            )
+        if extracted_text.strip():
+            return (
+                f"page {index} contains selectable/searchable text that whole-page "
+                "rasterization would discard"
+            )
+
+    return _bilevel_suitability_refusal(input_path, page_specs)
+
+
 def _single_ccitt_image(image: Image.Image, writer: PdfWriter) -> IndirectObject:
     buffer = BytesIO()
     image.save(buffer, format="PDF", resolution=float(FIXED_DPI))
@@ -444,6 +542,17 @@ def fit_monochrome_vector_pdf(
             target_bytes=target_bytes,
             page_count=0 if reader.is_encrypted else len(reader.pages),
             reasons=(refusal or "document failed the destructive-rasterization safety gate",),
+        )
+
+    refusal = _destructive_content_refusal(input_path, reader, page_specs)
+    if refusal is not None:
+        return _result(
+            MonochromeFitStatus.UNSUPPORTED_DOCUMENT,
+            input_path,
+            input_size=input_size,
+            target_bytes=target_bytes,
+            page_count=len(page_specs),
+            reasons=(refusal, "no output was written"),
         )
 
     diagnosis = diagnose_pdf(input_path, target_bytes=target_bytes)
