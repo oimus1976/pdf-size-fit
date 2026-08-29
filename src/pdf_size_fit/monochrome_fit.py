@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageFilter
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import (
     ArrayObject,
@@ -27,10 +27,16 @@ from .diagnose import Route, diagnose_pdf
 
 
 FIXED_DPI = 300
-PREFLIGHT_DPI = 72
+NEAR_BLACK_MAX = 32
 MIDTONE_MIN = 33
 MIDTONE_MAX = 246
-MAX_MIDTONE_FRACTION = 0.01
+NEAR_WHITE_MIN = 247
+MIDTONE_SUPPORT_FILTER_SIZE = 5
+MIDTONE_PERSISTENCE_FILTER_SIZE = 3
+MAX_RENDER_SIZE_ROUNDING_DELTA = 1
+MAX_SEARCHABLE_TEXT_CHARS_PER_PAGE = 8
+MAX_SEARCHABLE_TEXT_LINES_PER_PAGE = 1
+MAX_SEARCHABLE_TEXT_CHARS_PER_DOCUMENT = 256
 ALLOWED_CATALOG_KEYS = frozenset({"/Type", "/Pages"})
 ALLOWED_PAGE_KEYS = frozenset(
     {
@@ -276,6 +282,144 @@ def _preflight(reader: PdfReader) -> tuple[tuple[_PageSpec, ...] | None, str | N
     return _read_page_specs(reader)
 
 
+_TextMetrics = tuple[tuple[int, int], ...]
+
+
+def _normalized_text_metrics(text: str) -> tuple[int, int]:
+    return (
+        sum(1 for character in text if not character.isspace()),
+        sum(1 for line in text.splitlines() if line.strip()),
+    )
+
+
+def _pypdf_text_metrics(
+    reader: PdfReader,
+) -> tuple[_TextMetrics | None, str | None]:
+    metrics: list[tuple[int, int]] = []
+    for index, page in enumerate(reader.pages, start=1):
+        try:
+            extracted_text = page.extract_text()
+        except Exception as exc:
+            return None, (
+                f"page {index} pypdf text inspection could not be completed "
+                f"reliably ({type(exc).__name__})"
+            )
+        if not isinstance(extracted_text, str):
+            return None, (
+                f"page {index} pypdf text inspection did not return a reliable "
+                "string result"
+            )
+        metrics.append(_normalized_text_metrics(extracted_text))
+        del extracted_text
+    return tuple(metrics), None
+
+
+def _pdfium_text_metrics(
+    input_path: Path,
+    page_count: int,
+) -> tuple[_TextMetrics | None, str | None]:
+    current_page = 0
+    try:
+        import pypdfium2 as pdfium
+
+        pdf = pdfium.PdfDocument(str(input_path))
+        try:
+            if len(pdf) != page_count:
+                raise RuntimeError("PDFium and pypdf disagree on the source page count")
+            metrics: list[tuple[int, int]] = []
+            for current_page in range(1, page_count + 1):
+                source_page = pdf[current_page - 1]
+                text_page = None
+                try:
+                    text_page = source_page.get_textpage()
+                    extracted_text = text_page.get_text_bounded()
+                    if not isinstance(extracted_text, str):
+                        return None, (
+                            f"page {current_page} PDFium text inspection did not "
+                            "return a reliable string result"
+                        )
+                    metrics.append(_normalized_text_metrics(extracted_text))
+                    del extracted_text
+                finally:
+                    if text_page is not None:
+                        text_page.close()
+                    source_page.close()
+        finally:
+            pdf.close()
+    except Exception as exc:
+        page_prefix = f"page {current_page} " if current_page else ""
+        return None, (
+            f"{page_prefix}PDFium text inspection could not be completed reliably "
+            f"({type(exc).__name__})"
+        )
+    return tuple(metrics), None
+
+
+def _has_persistent_unsupported_midtone(grayscale: Image.Image) -> bool:
+    minimum = None
+    maximum = None
+    midtone = None
+    has_near_black = None
+    has_near_white = None
+    bilateral_support = None
+    supported_midtone = None
+    unsupported_midtone = None
+    persistent_unsupported = None
+    try:
+        minimum = grayscale.filter(
+            ImageFilter.MinFilter(MIDTONE_SUPPORT_FILTER_SIZE)
+        )
+        maximum = grayscale.filter(
+            ImageFilter.MaxFilter(MIDTONE_SUPPORT_FILTER_SIZE)
+        )
+        midtone = grayscale.point(
+            lambda value: 255 if MIDTONE_MIN <= value <= MIDTONE_MAX else 0
+        )
+        has_near_black = minimum.point(
+            lambda value: 255 if value <= NEAR_BLACK_MAX else 0
+        )
+        has_near_white = maximum.point(
+            lambda value: 255 if value >= NEAR_WHITE_MIN else 0
+        )
+        bilateral_support = ImageChops.multiply(has_near_black, has_near_white)
+        supported_midtone = ImageChops.multiply(midtone, bilateral_support)
+        unsupported_midtone = ImageChops.subtract(midtone, supported_midtone)
+        persistent_unsupported = unsupported_midtone.filter(
+            ImageFilter.MinFilter(MIDTONE_PERSISTENCE_FILTER_SIZE)
+        )
+        return persistent_unsupported.getbbox() is not None
+    finally:
+        for image in (
+            persistent_unsupported,
+            unsupported_midtone,
+            supported_midtone,
+            bilateral_support,
+            has_near_white,
+            has_near_black,
+            midtone,
+            maximum,
+            minimum,
+        ):
+            if image is not None:
+                image.close()
+
+
+def _require_render_size_within_rounding_tolerance(
+    actual_size: tuple[int, int],
+    expected_size: tuple[int, int],
+    page_number: int,
+) -> None:
+    if any(
+        abs(actual - expected) > MAX_RENDER_SIZE_ROUNDING_DELTA
+        for actual, expected in zip(actual_size, expected_size)
+    ):
+        raise RuntimeError(
+            f"page {page_number} rendered at {actual_size}, expected {expected_size} "
+            f"at {FIXED_DPI} dpi within {MAX_RENDER_SIZE_ROUNDING_DELTA} pixel "
+            "per axis"
+        )
+
+
 def _bilevel_suitability_refusal(
     input_path: Path,
     page_specs: tuple[_PageSpec, ...],
@@ -298,35 +442,35 @@ def _bilevel_suitability_refusal(
                             f"page {index} rotation differs between PDF readers"
                         )
                     bitmap = source_page.render(
-                        scale=PREFLIGHT_DPI / 72.0,
+                        scale=FIXED_DPI / 72.0,
                         rotation=(-normalized_rotation) % 360,
                         grayscale=True,
                         draw_annots=False,
                     )
                     grayscale = bitmap.to_pil().convert("L")
                     expected_size = (
-                        ceil(spec.width * PREFLIGHT_DPI / 72.0),
-                        ceil(spec.height * PREFLIGHT_DPI / 72.0),
+                        ceil(spec.width * FIXED_DPI / 72.0),
+                        ceil(spec.height * FIXED_DPI / 72.0),
                     )
-                    if grayscale.size != expected_size:
-                        raise RuntimeError(
-                            f"page {index} rendered at {grayscale.size}, expected "
-                            f"{expected_size} at {PREFLIGHT_DPI} dpi"
-                        )
+                    _require_render_size_within_rounding_tolerance(
+                        grayscale.size,
+                        expected_size,
+                        index,
+                    )
                     histogram = grayscale.histogram()
                     total_pixels = grayscale.width * grayscale.height
                     if len(histogram) != 256 or total_pixels <= 0:
                         raise RuntimeError(
                             f"page {index} did not produce a valid 8-bit grayscale image"
                         )
-                    midtone_pixels = sum(histogram[MIDTONE_MIN : MIDTONE_MAX + 1])
-                    midtone_fraction = midtone_pixels / total_pixels
-                    if midtone_fraction > MAX_MIDTONE_FRACTION:
+                    if _has_persistent_unsupported_midtone(grayscale):
                         return (
-                            f"page {index} contains material grayscale/midtone content "
-                            f"({midtone_fraction:.3%} of pixels at luminance "
-                            f"{MIDTONE_MIN}..{MIDTONE_MAX}, above the "
-                            f"{MAX_MIDTONE_FRACTION:.1%} limit)"
+                            f"page {index} contains a persistent unsupported-midtone "
+                            f"region: a complete {MIDTONE_PERSISTENCE_FILTER_SIZE}x"
+                            f"{MIDTONE_PERSISTENCE_FILTER_SIZE} block of luminance "
+                            f"{MIDTONE_MIN}..{MIDTONE_MAX} pixels lacks bilateral "
+                            f"near-black 0..{NEAR_BLACK_MAX} and near-white "
+                            f"{NEAR_WHITE_MIN}..255 edge support"
                         )
                 finally:
                     if grayscale is not None:
@@ -338,7 +482,7 @@ def _bilevel_suitability_refusal(
             pdf.close()
     except Exception as exc:
         return (
-            "72 dpi bilevel-suitability rendering or inspection could not be "
+            "300 dpi bilevel edge-locality rendering or inspection could not be "
             f"completed reliably ({type(exc).__name__})"
         )
     return None
@@ -348,26 +492,82 @@ def _destructive_content_refusal(
     input_path: Path,
     reader: PdfReader,
     page_specs: tuple[_PageSpec, ...],
-) -> str | None:
-    for index, page in enumerate(reader.pages, start=1):
-        try:
-            extracted_text = page.extract_text()
-        except Exception as exc:
-            return (
-                f"page {index} extractable text could not be inspected reliably "
-                f"({type(exc).__name__})"
-            )
-        if not isinstance(extracted_text, str):
-            return (
-                f"page {index} extractable text did not return a reliable string result"
-            )
-        if extracted_text.strip():
-            return (
-                f"page {index} contains selectable/searchable text that whole-page "
-                "rasterization would discard"
-            )
+    *,
+    allow_small_searchable_text_rasterization: bool,
+) -> tuple[str | None, bool]:
+    pypdf_metrics, refusal = _pypdf_text_metrics(reader)
+    if refusal is not None or pypdf_metrics is None:
+        return refusal or "pypdf text inspection failed closed", False
 
-    return _bilevel_suitability_refusal(input_path, page_specs)
+    pdfium_metrics, refusal = _pdfium_text_metrics(input_path, len(page_specs))
+    if refusal is not None or pdfium_metrics is None:
+        return refusal or "PDFium text inspection failed closed", False
+    if len(pypdf_metrics) != len(page_specs) or len(pdfium_metrics) != len(page_specs):
+        return "text parser page metrics do not match the source page count", False
+
+    pages_with_text = [
+        index
+        for index, (pypdf_metric, pdfium_metric) in enumerate(
+            zip(pypdf_metrics, pdfium_metrics), start=1
+        )
+        if pypdf_metric[0] or pdfium_metric[0]
+    ]
+    if pages_with_text and not allow_small_searchable_text_rasterization:
+        return (
+            (
+                f"page {pages_with_text[0]} contains selectable/searchable text that "
+                "at least one of pypdf or PDFium detected and whole-page "
+                "rasterization would discard"
+            ),
+            False,
+        )
+
+    if allow_small_searchable_text_rasterization:
+        for parser_name, metrics in (
+            ("pypdf", pypdf_metrics),
+            ("PDFium", pdfium_metrics),
+        ):
+            for index, (non_whitespace_chars, _) in enumerate(metrics, start=1):
+                if non_whitespace_chars > MAX_SEARCHABLE_TEXT_CHARS_PER_PAGE:
+                    return (
+                        f"page {index} {parser_name} normalized text metrics contain "
+                        f"{non_whitespace_chars} non-whitespace characters, above "
+                        "the explicit opt-in limit of "
+                        f"{MAX_SEARCHABLE_TEXT_CHARS_PER_PAGE}",
+                        False,
+                    )
+            for index, (_, non_empty_lines) in enumerate(metrics, start=1):
+                if non_empty_lines > MAX_SEARCHABLE_TEXT_LINES_PER_PAGE:
+                    return (
+                        f"page {index} {parser_name} normalized text metrics contain "
+                        f"{non_empty_lines} non-empty lines, above the explicit "
+                        f"opt-in limit of {MAX_SEARCHABLE_TEXT_LINES_PER_PAGE}",
+                        False,
+                    )
+            document_chars = sum(non_whitespace for non_whitespace, _ in metrics)
+            if document_chars > MAX_SEARCHABLE_TEXT_CHARS_PER_DOCUMENT:
+                return (
+                    f"document {parser_name} normalized text metrics contain "
+                    f"{document_chars} non-whitespace characters, above the "
+                    "explicit opt-in limit of "
+                    f"{MAX_SEARCHABLE_TEXT_CHARS_PER_DOCUMENT}",
+                    False,
+                )
+
+        for index, (pypdf_metric, pdfium_metric) in enumerate(
+            zip(pypdf_metrics, pdfium_metrics), start=1
+        ):
+            if pypdf_metric != pdfium_metric:
+                return (
+                    f"page {index} normalized text metrics disagree between pypdf "
+                    "and PDFium",
+                    False,
+                )
+
+    return (
+        _bilevel_suitability_refusal(input_path, page_specs),
+        bool(pages_with_text and allow_small_searchable_text_rasterization),
+    )
 
 
 def _single_ccitt_image(image: Image.Image, writer: PdfWriter) -> IndirectObject:
@@ -450,10 +650,11 @@ def _build_candidate(
                 source_page.close()
 
             expected_size = (ceil(spec.width * scale), ceil(spec.height * scale))
-            if monochrome.size != expected_size:
-                raise RuntimeError(
-                    f"page {index + 1} rendered at {monochrome.size}, expected {expected_size} at 300 dpi"
-                )
+            _require_render_size_within_rounding_tolerance(
+                monochrome.size,
+                expected_size,
+                index + 1,
+            )
 
             image_ref = _single_ccitt_image(monochrome, writer)
             page = writer.add_blank_page(width=spec.width, height=spec.height)
@@ -541,6 +742,7 @@ def fit_monochrome_vector_pdf(
     *,
     target_bytes: int = 10_000_000,
     dpi: int = FIXED_DPI,
+    allow_small_searchable_text_rasterization: bool = False,
 ) -> MonochromeFitResult:
     if target_bytes <= 0:
         raise ValueError("target_bytes must be greater than zero")
@@ -578,17 +780,6 @@ def fit_monochrome_vector_pdf(
             reasons=(refusal or "document failed the destructive-rasterization safety gate",),
         )
 
-    refusal = _destructive_content_refusal(input_path, reader, page_specs)
-    if refusal is not None:
-        return _result(
-            MonochromeFitStatus.UNSUPPORTED_DOCUMENT,
-            input_path,
-            input_size=input_size,
-            target_bytes=target_bytes,
-            page_count=len(page_specs),
-            reasons=(refusal, "no output was written"),
-        )
-
     diagnosis = diagnose_pdf(input_path, target_bytes=target_bytes)
     if diagnosis.route is not Route.VECTOR_MONOCHROME:
         return _result(
@@ -601,6 +792,24 @@ def fit_monochrome_vector_pdf(
                 f"diagnosis proposed route {diagnosis.route.value!r}, not 'vector-monochrome'",
                 "no output was written",
             ),
+        )
+
+    refusal, small_searchable_text_rasterized = _destructive_content_refusal(
+        input_path,
+        reader,
+        page_specs,
+        allow_small_searchable_text_rasterization=(
+            allow_small_searchable_text_rasterization
+        ),
+    )
+    if refusal is not None:
+        return _result(
+            MonochromeFitStatus.UNSUPPORTED_DOCUMENT,
+            input_path,
+            input_size=input_size,
+            target_bytes=target_bytes,
+            page_count=len(page_specs),
+            reasons=(refusal, "no output was written"),
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -634,6 +843,21 @@ def fit_monochrome_vector_pdf(
             output_path.unlink(missing_ok=True)
         raise
 
+    reasons = [
+        "diagnosis selected the vector-monochrome route for the requested target",
+        "all pages were rendered by PDFium at fixed 300 dpi and encoded as 1-bit CCITT Group 4",
+        "page count, MediaBox dimensions, rotation, reader reopenability, encoding, and target size were verified",
+    ]
+    if small_searchable_text_rasterized:
+        reasons.append(
+            "a small selectable/searchable text layer was rasterized within both "
+            "parsers' provisional bounds by explicit opt-in; selectable/searchable "
+            "and search/copy semantics were lost"
+        )
+    reasons.append(
+        "whole-page rasterization is destructive and does not preserve selectable text or vector scalability"
+    )
+
     return _result(
         MonochromeFitStatus.FITTED,
         input_path,
@@ -642,10 +866,5 @@ def fit_monochrome_vector_pdf(
         page_count=len(page_specs),
         output_path=output_path,
         output_size=output_size,
-        reasons=(
-            "diagnosis selected the vector-monochrome route for the requested target",
-            "all pages were rendered by PDFium at fixed 300 dpi and encoded as 1-bit CCITT Group 4",
-            "page count, MediaBox dimensions, rotation, reader reopenability, encoding, and target size were verified",
-            "whole-page rasterization is destructive and does not preserve selectable text or vector scalability",
-        ),
+        reasons=tuple(reasons),
     )

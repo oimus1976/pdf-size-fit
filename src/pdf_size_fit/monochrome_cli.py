@@ -23,6 +23,14 @@ def main() -> int:
         default=300,
         help="fixed validated resolution; values other than 300 are rejected",
     )
+    parser.add_argument(
+        "--allow-small-searchable-text-rasterization",
+        action="store_true",
+        help=(
+            "explicitly allow rasterizing a searchable text layer only within the "
+            "provisional PoC bounds"
+        ),
+    )
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
 
@@ -31,6 +39,9 @@ def main() -> int:
         args.output,
         target_bytes=args.target_bytes,
         dpi=args.dpi,
+        allow_small_searchable_text_rasterization=(
+            args.allow_small_searchable_text_rasterization
+        ),
     )
 
     if args.as_json:
