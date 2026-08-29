@@ -15,6 +15,15 @@ def main() -> int:
     parser.add_argument("output", type=Path)
     parser.add_argument("--target-bytes", type=int, default=10_000_000)
     parser.add_argument("--min-quality", type=int, default=70)
+    parser.add_argument(
+        "--min-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "minimum image scale allowed for the downsampling fallback; "
+            "default 1.0 keeps downsampling disabled unless explicitly opted in"
+        ),
+    )
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
 
@@ -23,6 +32,7 @@ def main() -> int:
         args.output,
         target_bytes=args.target_bytes,
         min_quality=args.min_quality,
+        min_scale=args.min_scale,
     )
 
     if args.as_json:
@@ -33,13 +43,18 @@ def main() -> int:
         print(f"target: {result.target_bytes} bytes")
         if result.output_size_bytes is not None:
             print(f"output: {result.output_size_bytes} bytes")
+        if result.selected_scale is not None:
+            print(f"selected image scale: {result.selected_scale:.0%}")
         if result.selected_quality is not None:
             print(f"selected JPEG quality: {result.selected_quality}")
         print(f"unique image XObjects replaced: {result.images_replaced}")
         if result.attempts:
             print("attempts:")
             for attempt in result.attempts:
-                print(f"- quality {attempt.quality}: {attempt.size_bytes} bytes")
+                print(
+                    f"- scale {attempt.scale:.0%}, quality {attempt.quality}: "
+                    f"{attempt.size_bytes} bytes"
+                )
         print("reasons:")
         for reason in result.reasons:
             print(f"- {reason}")

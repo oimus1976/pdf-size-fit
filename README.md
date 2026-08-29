@@ -42,26 +42,50 @@ Current route names are `skip`, `image-heavy`, `vector-monochrome`, `vector-colo
 
 ## Image-heavy fitting PoC
 
-The image route can clone the original PDF structure, recompress unique supported image XObjects through pypdf's public image replacement API, and search from high JPEG quality downward until the byte target is met.
+The image route clones the original PDF structure and recompresses unique supported image XObjects through pypdf's public image replacement API.
 
 ```powershell
 pdf-size-fit-image .\oversize.pdf .\oversize-fit.pdf --target-bytes 10000000
 ```
 
+By default, downsampling is disabled. Fixed-condition validation has been completed for one representative real-world sample, but the destructive fallback remains explicit opt-in:
+
+```powershell
+pdf-size-fit-image .\oversize.pdf .\oversize-fit.pdf `
+  --target-bytes 10000000 `
+  --min-quality 70 `
+  --min-scale 0.80
+```
+
 The PoC currently:
 
-- starts at JPEG quality 100,
+- starts at full image resolution and JPEG quality 100,
+- exhausts the configured full-resolution JPEG-quality range before considering downsampling,
+- keeps downsampling disabled by default with `min_scale=1.0`,
+- when explicitly enabled, scans 99%, 98%, 97% ... down to the configured scale floor at the minimum JPEG quality and selects the first fitting integer-percent scale,
+- then raises JPEG quality at that scale as far as the current quality search permits,
+- uses ceiling pixel rounding so integer pixel dimensions do not cross the requested relative scale floor,
 - rebuilds every trial from the original PDF rather than repeatedly recompressing a lossy intermediate,
-- refines between coarse quality probes to select the highest tested quality that meets the target,
-- preserves supported image dictionary semantics such as a compatible `/SMask`,
+- records both image scale and JPEG quality for each attempt,
+- preserves supported image dictionary semantics such as a compatible `/SMask` at full resolution,
+- when downsampling, removes a redundant `/SMask` only if it can prove that the mask is fully opaque, using source-side preflight and writer-side revalidation that does not depend on indirect object IDs remaining stable,
+- applies a strict soft-mask dictionary allowlist before removing a fully opaque `/SMask`; optional-content, metadata, and unknown semantics fail closed,
+- refuses to downsample images with any other `/SMask`, including masks that contain transparency,
 - handles shared images nested inside reusable Form XObjects in the current synthetic coverage,
 - verifies page count, page boxes, and rotation before accepting output,
 - refuses unsupported or unknown image structures rather than silently flattening them,
 - refuses signed/certified PDFs,
 - refuses PDFs with standard PDF/A identification metadata until conformance after rewriting can be validated,
+- returns `target-not-met` without writing output if the configured JPEG-quality and image-scale floors are exhausted,
 - never overwrites the input or a pre-existing output file.
 
+`min_scale` is a relative source-pixel floor, not a DPI/readability guarantee. The current resolution-first policy is also provisional: a higher-resolution/lower-JPEG-quality candidate is not guaranteed to look better than a lower-resolution/higher-quality candidate for every document. The current PoC applies one selected scale to all supported images. One 11-page sample was forced through the fallback and fitted below a 1,000,000-byte target at 83% scale / JPEG quality 70; fixed-condition PDFium rendering and visual review found the result acceptable for that sample's approval-attachment use. This is sample- and use-specific evidence, not a general quality guarantee or permission to enable automatic/default downsampling.
+
 Synthetic preservation tests currently cover a bookmark, a basic AcroForm field/value, and an embedded file in addition to the image-specific cases. This is still narrow PoC coverage, not a broad PDF compatibility claim.
+
+The downsampling fallback remains behind an explicit opt-in gate. The current head has 31 passing tests in the dedicated supported local venv, and GitHub Actions run #33 passed on Python 3.11 and 3.12 before the subsequent documentation-only refresh. The representative forced-downsampling result was reproduced exactly after the stricter soft-mask allowlist fix.
+
+Compression is irreversible. The tool does not overwrite or automatically delete the input, and users may need to retain the original according to their organization's document-management rules. A future GUI should not offer a post-success "replace/delete original" shortcut, nor should the tool create an unsolicited backup copy that could unnecessarily duplicate sensitive or official records.
 
 ## Project stage
 

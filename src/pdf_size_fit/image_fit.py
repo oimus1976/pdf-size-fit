@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from enum import Enum
+from math import ceil
 from pathlib import Path
 import shutil
 import tempfile
@@ -28,6 +29,7 @@ class ImageFitStatus(str, Enum):
 class ImageFitAttempt:
     quality: int
     size_bytes: int
+    scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,7 @@ class ImageFitResult:
     images_replaced: int
     attempts: tuple[ImageFitAttempt, ...]
     reasons: tuple[str, ...]
+    selected_scale: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -62,6 +65,12 @@ _PRESERVED_IMAGE_KEYS = {
     "/ID", "/OPI", "/Metadata", "/OC",
 }
 _REJECTED_IMAGE_KEYS = {"/Decode", "/Mask", "/ImageMask", "/SMaskInData"}
+_ALLOWED_OPAQUE_SMASK_KEYS = {
+    "/Type", "/Subtype", "/Width", "/Height", "/ColorSpace",
+    "/BitsPerComponent", "/Filter", "/DecodeParms", "/Length",
+    "/Decode", "/Interpolate", "/Intent", "/Alternates", "/Name",
+    "/StructParent", "/ID", "/OPI",
+}
 
 
 def _resolve_pdf_obj(obj: Any) -> Any:
@@ -121,6 +130,82 @@ def _simple_colorspace(obj: StreamObject) -> str | None:
     if colorspace in ("/DeviceRGB", "/DeviceGray"):
         return str(colorspace)
     return None
+
+
+def _decode_is_identity_gray(decode: Any) -> bool:
+    if decode is None:
+        return True
+    decode = _resolve_pdf_obj(decode)
+    if not isinstance(decode, (ArrayObject, list, tuple)) or len(decode) != 2:
+        return False
+    try:
+        return float(decode[0]) == 0.0 and float(decode[1]) == 1.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_redundant_opaque_smask(smask: Any, *, width: int, height: int) -> bool:
+    smask_obj = _resolve_pdf_obj(smask)
+    if not isinstance(smask_obj, StreamObject) or smask_obj.get("/Subtype") != "/Image":
+        return False
+    if {str(key) for key in smask_obj.keys()} - _ALLOWED_OPAQUE_SMASK_KEYS:
+        return False
+    if "/Type" in smask_obj and smask_obj.get("/Type") != "/XObject":
+        return False
+    if _simple_colorspace(smask_obj) != "/DeviceGray":
+        return False
+    if smask_obj.get("/BitsPerComponent") != 8:
+        return False
+    if smask_obj.get("/Width") != width or smask_obj.get("/Height") != height:
+        return False
+    if "/Matte" in smask_obj:
+        return False
+    if any(key in smask_obj for key in ("/Mask", "/SMask", "/ImageMask", "/SMaskInData")):
+        return False
+    if not _decode_is_identity_gray(smask_obj.get("/Decode")):
+        return False
+
+    expected_bytes = width * height
+    try:
+        data = smask_obj.get_data()
+    except Exception:
+        return False
+    if len(data) != expected_bytes:
+        return False
+    return data.strip(b"\xff") == b""
+
+
+def _find_redundant_opaque_smask_images(input_path: Path) -> frozenset[tuple[int, int]]:
+    reader = PdfReader(str(input_path))
+    seen: set[tuple[int, int]] = set()
+    removable: set[tuple[int, int]] = set()
+
+    for page in reader.pages:
+        for img in page.images:
+            ref = img.indirect_reference
+            if ref is None:
+                continue
+            key = _ref_key(ref)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            obj = ref.get_object()
+            smask = obj.get("/SMask")
+            if smask is None:
+                continue
+
+            width = obj.get("/Width")
+            height = obj.get("/Height")
+            if not isinstance(width, int) or not isinstance(height, int):
+                raise UnsupportedImageError("/SMask base image dimensions are not integer values")
+            if not _is_redundant_opaque_smask(smask, width=width, height=height):
+                raise UnsupportedImageError(
+                    "downsampling an image with a non-redundant or unproven /SMask is not supported"
+                )
+            removable.add(key)
+
+    return frozenset(removable)
 
 
 def _validate_image_for_replacement(img: Any) -> tuple[IndirectObject, dict[Any, Any]]:
@@ -183,7 +268,17 @@ def _base_image_for_jpeg(image: Image.Image, *, has_smask: bool) -> Image.Image:
     return image.convert("RGB")
 
 
-def _build_candidate(input_path: Path, output_path: Path, *, quality: int) -> int:
+def _build_candidate(
+    input_path: Path,
+    output_path: Path,
+    *,
+    quality: int,
+    scale: float = 1.0,
+    removable_opaque_smask_refs: frozenset[tuple[int, int]] = frozenset(),
+) -> int:
+    if not 0.0 < scale <= 1.0:
+        raise ValueError("scale must be greater than 0 and at most 1")
+
     writer = PdfWriter(clone_from=str(input_path))
     seen: set[tuple[int, int]] = set()
     replaced = 0
@@ -199,7 +294,30 @@ def _build_candidate(input_path: Path, output_path: Path, *, quality: int) -> in
             seen.add(key)
 
             ref, preserved = _validate_image_for_replacement(img)
-            replacement = _base_image_for_jpeg(img.image, has_smask=NameObject("/SMask") in preserved)
+            has_smask = NameObject("/SMask") in preserved
+            replacement = _base_image_for_jpeg(img.image, has_smask=has_smask)
+
+            if scale < 1.0:
+                if has_smask:
+                    writer_obj = ref.get_object()
+                    width = writer_obj.get("/Width")
+                    height = writer_obj.get("/Height")
+                    smask = writer_obj.get("/SMask")
+                    if (
+                        not removable_opaque_smask_refs
+                        or not isinstance(width, int)
+                        or not isinstance(height, int)
+                        or smask is None
+                        or not _is_redundant_opaque_smask(smask, width=width, height=height)
+                    ):
+                        raise UnsupportedImageError(
+                            "downsampling an image with a non-redundant or unproven /SMask is not supported"
+                        )
+                    preserved.pop(NameObject("/SMask"), None)
+                new_width = max(1, ceil(replacement.width * scale))
+                new_height = max(1, ceil(replacement.height * scale))
+                replacement = replacement.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
             try:
                 img.replace(replacement, quality=quality, subsampling=0)
             except Exception as exc:
@@ -208,8 +326,8 @@ def _build_candidate(input_path: Path, output_path: Path, *, quality: int) -> in
                 ) from exc
 
             new_obj = ref.get_object()
-            for key, value in preserved.items():
-                new_obj[key] = value
+            for preserved_key, value in preserved.items():
+                new_obj[preserved_key] = value
 
             replaced += 1
 
@@ -260,11 +378,14 @@ def fit_image_heavy_pdf(
     *,
     target_bytes: int = 10_000_000,
     min_quality: int = 70,
+    min_scale: float = 1.0,
 ) -> ImageFitResult:
     if target_bytes <= 0:
         raise ValueError("target_bytes must be greater than zero")
     if not 1 <= min_quality <= 100:
         raise ValueError("min_quality must be between 1 and 100")
+    if not 0.0 < min_scale <= 1.0:
+        raise ValueError("min_scale must be greater than 0 and at most 1")
 
     input_path = Path(input_path)
     output_path = Path(output_path)
@@ -326,56 +447,101 @@ def fit_image_heavy_pdf(
     best_quality: int | None = None
     best_size: int | None = None
     best_replaced = 0
+    best_scale: float | None = None
+    removable_opaque_smask_refs: frozenset[tuple[int, int]] = frozenset()
 
     try:
         with tempfile.TemporaryDirectory(prefix="pdf-size-fit-") as temp_dir_name:
             temp_dir = Path(temp_dir_name)
-            previous_over_quality: int | None = None
+            cache: dict[tuple[int, int], tuple[Path, int, int]] = {}
 
-            for quality in _quality_probes(min_quality):
-                candidate = temp_dir / f"candidate-q{quality}.pdf"
-                try:
-                    replaced = _build_candidate(input_path, candidate, quality=quality)
-                except UnsupportedImageError as exc:
-                    return ImageFitResult(
-                        status=ImageFitStatus.UNSUPPORTED_IMAGE,
-                        input_path=str(input_path), output_path=None,
-                        input_size_bytes=input_size, output_size_bytes=None,
-                        target_bytes=target_bytes, selected_quality=None,
-                        images_replaced=0, attempts=tuple(attempts),
-                        reasons=(str(exc), "input was left unchanged and no output was written"),
-                    )
+            def measure(scale_percent: int, quality: int) -> tuple[Path, int, int]:
+                cache_key = (scale_percent, quality)
+                cached = cache.get(cache_key)
+                if cached is not None:
+                    return cached
 
+                scale = scale_percent / 100.0
+                candidate = temp_dir / f"candidate-s{scale_percent:03d}-q{quality}.pdf"
+                replaced = _build_candidate(
+                    input_path,
+                    candidate,
+                    quality=quality,
+                    scale=scale,
+                    removable_opaque_smask_refs=removable_opaque_smask_refs,
+                )
                 _verify_candidate(input_path, candidate)
                 size = candidate.stat().st_size
-                attempts.append(ImageFitAttempt(quality=quality, size_bytes=size))
+                attempts.append(ImageFitAttempt(quality=quality, size_bytes=size, scale=scale))
+                result = (candidate, size, replaced)
+                cache[cache_key] = result
+                return result
 
-                if size <= target_bytes:
-                    best_candidate = candidate
-                    best_quality = quality
-                    best_size = size
-                    best_replaced = replaced
+            def search_quality(scale_percent: int) -> tuple[Path, int, int, int] | None:
+                previous_over_quality: int | None = None
+                for quality in _quality_probes(min_quality):
+                    candidate, size, replaced = measure(scale_percent, quality)
+                    if size <= target_bytes:
+                        best = (candidate, quality, size, replaced)
+                        if quality == 100 or previous_over_quality is None:
+                            return best
 
-                    if quality == 100 or previous_over_quality is None:
-                        break
+                        for refine_quality in range(previous_over_quality - 1, quality, -1):
+                            refined, refined_size, refined_replaced = measure(scale_percent, refine_quality)
+                            if refined_size <= target_bytes:
+                                return refined, refine_quality, refined_size, refined_replaced
+                        return best
+                    previous_over_quality = quality
+                return None
 
-                    for refine_quality in range(previous_over_quality - 1, quality, -1):
-                        refined = temp_dir / f"candidate-q{refine_quality}.pdf"
-                        replaced = _build_candidate(input_path, refined, quality=refine_quality)
-                        _verify_candidate(input_path, refined)
-                        refined_size = refined.stat().st_size
-                        attempts.append(ImageFitAttempt(quality=refine_quality, size_bytes=refined_size))
-                        if refined_size <= target_bytes:
-                            best_candidate = refined
-                            best_quality = refine_quality
-                            best_size = refined_size
-                            best_replaced = replaced
-                            break
-                    break
+            try:
+                full_resolution = search_quality(100)
+            except UnsupportedImageError as exc:
+                return ImageFitResult(
+                    status=ImageFitStatus.UNSUPPORTED_IMAGE,
+                    input_path=str(input_path), output_path=None,
+                    input_size_bytes=input_size, output_size_bytes=None,
+                    target_bytes=target_bytes, selected_quality=None,
+                    images_replaced=0, attempts=tuple(attempts),
+                    reasons=(str(exc), "input was left unchanged and no output was written"),
+                )
 
-                previous_over_quality = quality
+            if full_resolution is not None:
+                best_candidate, best_quality, best_size, best_replaced = full_resolution
+                best_scale = 1.0
+            elif min_scale < 1.0:
+                min_percent = max(1, ceil(min_scale * 100))
+                if min_percent <= 99:
+                    try:
+                        removable_opaque_smask_refs = _find_redundant_opaque_smask_images(input_path)
+                        selected_percent: int | None = None
+                        for scale_percent in range(99, min_percent - 1, -1):
+                            _, scale_size, _ = measure(scale_percent, min_quality)
+                            if scale_size <= target_bytes:
+                                selected_percent = scale_percent
+                                break
+                    except UnsupportedImageError as exc:
+                        return ImageFitResult(
+                            status=ImageFitStatus.UNSUPPORTED_IMAGE,
+                            input_path=str(input_path), output_path=None,
+                            input_size_bytes=input_size, output_size_bytes=None,
+                            target_bytes=target_bytes, selected_quality=None,
+                            images_replaced=0, attempts=tuple(attempts),
+                            reasons=(
+                                str(exc),
+                                "full-resolution JPEG quality search did not meet the target and the downsampling fallback is unsafe for this image structure",
+                                "input was left unchanged and no output was written",
+                            ),
+                        )
 
-            if best_candidate is None or best_quality is None or best_size is None:
+                    if selected_percent is not None:
+                        downsampled = search_quality(selected_percent)
+                        if downsampled is None:
+                            raise RuntimeError("minimum-quality scale probe fit but quality search found no fitting candidate")
+                        best_candidate, best_quality, best_size, best_replaced = downsampled
+                        best_scale = selected_percent / 100.0
+
+            if best_candidate is None or best_quality is None or best_size is None or best_scale is None:
                 return ImageFitResult(
                     status=ImageFitStatus.TARGET_NOT_MET,
                     input_path=str(input_path), output_path=None,
@@ -383,8 +549,8 @@ def fit_image_heavy_pdf(
                     target_bytes=target_bytes, selected_quality=None,
                     images_replaced=0, attempts=tuple(attempts),
                     reasons=(
-                        f"target was not met at or above minimum JPEG quality {min_quality}",
-                        "no output was written; later PoCs may add resolution reduction or another route",
+                        f"target was not met at or above JPEG quality {min_quality} and image scale {min_scale:.0%}",
+                        "no output was written; another compression route or user-visible fallback is required",
                     ),
                 )
 
@@ -400,15 +566,29 @@ def fit_image_heavy_pdf(
         output_path.unlink(missing_ok=True)
         raise RuntimeError("selected output unexpectedly exceeds target after final copy")
 
+    if best_scale < 1.0:
+        fit_reason = (
+            f"image-heavy route met target at {best_scale:.0%} image scale and JPEG quality {best_quality}"
+        )
+    else:
+        fit_reason = f"image-heavy route met target at full image resolution and JPEG quality {best_quality}"
+
+    result_reasons = [
+        fit_reason,
+        "each candidate was rebuilt from the original PDF; lossy recompression was not cumulative",
+        "page count, media boxes, and rotation were verified before accepting the output",
+    ]
+    if best_scale < 1.0 and removable_opaque_smask_refs:
+        result_reasons.append(
+            f"removed {len(removable_opaque_smask_refs)} redundant fully opaque /SMask reference(s) before downsampling"
+        )
+
     return ImageFitResult(
         status=ImageFitStatus.FITTED,
         input_path=str(input_path), output_path=str(output_path),
         input_size_bytes=input_size, output_size_bytes=final_size,
         target_bytes=target_bytes, selected_quality=best_quality,
         images_replaced=best_replaced, attempts=tuple(attempts),
-        reasons=(
-            f"image-heavy route met target at JPEG quality {best_quality}",
-            "each quality attempt was rebuilt from the original PDF",
-            "page count, media boxes, and rotation were verified before accepting the output",
-        ),
+        reasons=tuple(result_reasons),
+        selected_scale=best_scale,
     )

@@ -70,22 +70,37 @@ Current PoC design:
 5. Visit unique image XObjects, including images nested inside Form XObjects, and replace only supported images using pypdf's public `ImageFile.replace()` API.
 6. Deduplicate by indirect object reference so a shared image reused across pages/forms is recompressed once and remains shared.
 7. Because `ImageFile.replace()` replaces the image stream dictionary, explicitly preserve supported non-pixel semantics such as `/SMask`, `/Interpolate`, `/Intent`, `/StructParent`, `/Metadata`, and `/OC`.
-8. Fail closed if an image has rendering semantics that are explicitly unsupported (`/Decode`, `/Mask`, `/ImageMask`, `/SMaskInData`) or an unknown dictionary key that the PoC cannot prove safe to discard.
-9. Start with JPEG quality 100 and no pixel downsampling.
-10. If the target is not met, probe quality downward in coarse steps and refine the first successful interval one quality point at a time.
-11. Rebuild each candidate from the original input, never from a previous lossy candidate.
-12. Verify page count, media boxes, rotation, and final byte target before copying a candidate to the requested output.
-13. Do not overwrite the source or an existing destination.
+8. Before building trials, preflight each source-side `/SMask`. Only a dimension-matching mask whose samples prove it is fully opaque is eligible for removal during downsampling; all other soft masks remain a downsampling refusal.
+9. When a downsampling trial is built from `PdfWriter(clone_from=...)`, revalidate the writer-side `/SMask` itself before removal. Reader and writer indirect object IDs can be renumbered during cloning, so eligibility must not be transferred by assuming object-ID identity. If writer-side revalidation fails, fail closed.
+10. Fail closed if an image has rendering semantics that are explicitly unsupported (`/Decode`, `/Mask`, `/ImageMask`, `/SMaskInData`) or an unknown dictionary key that the PoC cannot prove safe to discard.
+11. Start at full image resolution with JPEG quality 100.
+12. Search JPEG quality downward to the configured minimum and refine the first fitting interval one quality point at a time.
+13. Keep downsampling disabled by default (`min_scale=1.0`). A caller must explicitly select a lower minimum scale to opt in.
+14. If opt-in downsampling is enabled and no full-resolution candidate fits, scan integer-percent scales from 99% downward to the configured minimum scale at the configured minimum JPEG quality. The first fitting scale is the largest scale observed by that exhaustive percent-granularity scan; this avoids relying on strict file-size monotonicity across resampled JPEGs.
+15. At that selected scale, search JPEG quality again from high to low and select the highest fitting quality found by the current quality search.
+16. Rebuild every candidate from the original input, never from a previous lossy candidate.
+17. Use ceiling rounding for downsampled pixel dimensions so integer rounding does not cross the requested relative scale floor.
+18. Verify page count, media boxes, rotation, and final byte target before copying a candidate to the requested output.
 
-The current conservative supported image set is intentionally narrow: 8-bit `/DeviceRGB` and `/DeviceGray` image XObjects, optionally with a dimension-matching soft mask. The route fails closed on unsupported color spaces/bit depths, masks/decoding semantics, unknown image dictionary semantics, signed/certified PDFs, or PDF/A-identified PDFs.
+19. Do not overwrite the source or an existing destination.
 
-Synthetic structure coverage now confirms that the current clone-and-replace approach can preserve a shared image nested in a reusable Form XObject, bookmarks, an AcroForm text field/value, and an embedded file in the tested fixtures. These are regression checks, not broad guarantees for every variant of those features.
+The fallback therefore uses a lexicographic quality policy: **preserve image resolution first, then maximize JPEG quality within that resolution**, subject to the configured minimum JPEG quality and minimum image scale. This is a provisional PoC policy, not a claim that it maximizes perceptual quality. A lower-resolution/high-JPEG-quality candidate can look better than a higher-resolution/low-JPEG-quality candidate for some photographic content, while text-heavy slide imagery may behave differently.
+
+`min_scale` is only a **relative source-pixel floor**. It is not an effective-DPI, readability, barcode/QR-code, or OCR safety guarantee. For example, reducing a 600 dpi source to 50% is very different from reducing a 120 dpi source to 50%. A future production-quality policy may need page-placement-aware effective-DPI limits instead of, or in addition to, a simple relative scale.
+
+The current fallback applies the selected scale uniformly to all supported image XObjects that it replaces. This is intentionally simple for the PoC but can unnecessarily shrink small logos, codes, or other low-contribution images when one dominant photograph explains most of the file size. Future optimization should consider size contribution and image-specific safety constraints before enabling automatic downsampling by default.
+
+The current conservative supported image set is intentionally narrow: 8-bit `/DeviceRGB` and `/DeviceGray` image XObjects, optionally with a dimension-matching soft mask. Full-resolution JPEG recompression can preserve a compatible `/SMask`. For downsampling, the route may remove only a redundant soft mask that both source-side preflight and writer-side revalidation strictly prove is fully opaque. General `/SMask` images, including masks with any transparency, are still refused because resizing the base image without resizing the mask in lockstep would create mismatched dimensions. The route also fails closed on unsupported color spaces/bit depths, masks/decoding semantics, unknown image dictionary semantics, signed/certified PDFs, or PDF/A-identified PDFs.
+
+Synthetic structure coverage confirms that the current clone-and-replace approach can preserve a shared image nested in a reusable Form XObject, bookmarks, an AcroForm text field/value, and an embedded file in the tested fixtures. These are regression checks, not broad guarantees for every variant of those features.
 
 The PDF/A check is intentionally conservative and limited: it looks for standard PDF/A identification markers in the document metadata. A positive marker blocks rewriting. Absence of a marker is not a general proof that a PDF is not archival/conformance-sensitive.
 
-The route currently searches JPEG quality only. Resolution reduction is deferred until additional structure/quality validation is complete.
+If the target cannot be met at or above both configured floors, the route returns `target-not-met` and writes no output. The tool should surface another route or a user-visible fallback rather than silently crossing the quality floor.
 
-A real-world image-heavy sample reached the 10,000,000-byte target at quality 100 without downsampling. The structure-preserving implementation produced 7,573,276 bytes from a 10,478,354-byte input.
+A real-world image-heavy sample reached the 10,000,000-byte target at full resolution and quality 100; the structure-preserving implementation produced 7,573,276 bytes from a 10,478,354-byte input. The same 11-page sample was also forced through downsampling with a 1,000,000-byte target and fitted at 83% scale / JPEG quality 70, producing 985,422 bytes and replacing 11 images after removing 11 redundant fully opaque `/SMask` references. The adjacent tested candidates, 84% / quality 70 at 1,001,273 bytes and 83% / quality 71 at 1,000,986 bytes, exceeded the target and support the current boundary selection.
+
+Fixed-condition PDFium rendering via pypdfium2 4.30.0 completed for all 11 source/output pages at scale 1, rotation 0, crop 0, RGB, and 1376x768. The sample-specific aggregate results were global MAE 3.104882141500396 and global PSNR 29.99111734310301 dB; the worst page MAE was 3.699295714228036, the minimum page PSNR was 28.72845447939584 dB, and the maximum channel difference was 135. Visual review observed increased mosquito noise around edges while small text remained readable, and judged the output acceptable for this sample's approval-attachment use. This evidence is not a general quality guarantee and does not enable automatic/default downsampling.
 
 ## Route B: monochrome abnormal vector/outline PDFs
 
@@ -121,6 +136,7 @@ The safety margin is not yet fixed.
 Before a result is accepted, the PoC should eventually verify at least:
 
 - input file is not overwritten,
+- input file is not automatically deleted,
 - output is a readable PDF,
 - page count matches,
 - page dimensions/orientation are preserved,
@@ -128,9 +144,13 @@ Before a result is accepted, the PoC should eventually verify at least:
 - processing route and parameters are recorded,
 - failed processing does not replace or masquerade as a valid result.
 
-The image-route PoC currently automates the first five of these for accepted outputs, records quality/attempt metrics, rejects signed/certified and PDF/A-identified PDFs, and fails closed when image semantics fall outside its current preservation policy.
+The image-route PoC currently enforces non-overwrite behavior and automates the structural/size checks for accepted outputs, records scale/quality attempt metrics, rejects signed/certified and PDF/A-identified PDFs, and fails closed when image semantics fall outside its current preservation policy.
 
-Remaining high-priority coverage includes additional color spaces/bit depths, color-key masks and transparency variants, optional-content combinations, rotated/mixed-size pages, very long files, and the JPEG-quality-exhausted path before adding downsampling.
+Compression output is an irreversible derivative. A future GUI should not offer automatic deletion of the original after success or a workflow that replaces the original with the compressed output. The tool should state that the original may need to be retained. It also should not unconditionally create a backup in another location: unsolicited copies can increase the exposure of personal information or official records. The responsible organization, rather than the tool, should determine the original's storage location and retention period.
+
+Whether an electronically submitted compressed copy becomes an organizationally retained record, and how originals, authoritative copies, and retention duties are handled, depends on the adopting organization's document-management rules and electronic-approval operations. Production adoption must review those rules; the design must not generalize that an electronic-approval attachment is always the legal or institutional original.
+
+Remaining high-priority coverage includes additional color spaces/bit depths, color-key masks and transparency variants, optional-content combinations, rotated/mixed-size pages, very long files, and memory behavior.
 
 ## Public test data policy
 
