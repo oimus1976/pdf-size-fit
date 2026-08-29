@@ -48,6 +48,7 @@ def _rewrite_first_soft_mask(
     output: Path,
     *,
     non_opaque_first_sample: bool = False,
+    extra_smask_key: str | None = None,
 ) -> None:
     writer = PdfWriter(clone_from=str(source))
     image = writer.pages[0].images[0]
@@ -72,6 +73,8 @@ def _rewrite_first_soft_mask(
     smask_obj[NameObject("/Filter")] = NameObject("/FlateDecode")
     smask_obj.pop(NameObject("/DecodeParms"), None)
     smask_obj._data = zlib.compress(bytes(data))
+    if extra_smask_key is not None:
+        smask_obj[NameObject(extra_smask_key)] = DictionaryObject()
 
     with output.open("wb") as fh:
         writer.write(fh)
@@ -254,6 +257,54 @@ def test_downsampling_rejects_soft_mask_with_one_nonopaque_sample(tmp_path: Path
     output = tmp_path / "should-not-exist.pdf"
     _generate_transparent_image_pdf(transparent)
     _rewrite_first_soft_mask(transparent, source, non_opaque_first_sample=True)
+
+    result = fit_image_heavy_pdf(
+        source,
+        output,
+        target_bytes=1_000,
+        min_quality=70,
+        min_scale=0.50,
+    )
+
+    assert result.status is ImageFitStatus.UNSUPPORTED_IMAGE
+    assert any("non-redundant or unproven /SMask" in reason for reason in result.reasons)
+    assert not output.exists()
+
+
+def test_downsampling_rejects_fully_opaque_soft_mask_with_optional_content(
+    tmp_path: Path,
+) -> None:
+    transparent = tmp_path / "transparent.pdf"
+    source = tmp_path / "opaque-smask-with-oc.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_transparent_image_pdf(transparent)
+    _rewrite_first_soft_mask(transparent, source, extra_smask_key="/OC")
+
+    result = fit_image_heavy_pdf(
+        source,
+        output,
+        target_bytes=1_000,
+        min_quality=70,
+        min_scale=0.50,
+    )
+
+    assert result.status is ImageFitStatus.UNSUPPORTED_IMAGE
+    assert any("non-redundant or unproven /SMask" in reason for reason in result.reasons)
+    assert not output.exists()
+
+
+def test_downsampling_rejects_fully_opaque_soft_mask_with_unknown_key(
+    tmp_path: Path,
+) -> None:
+    transparent = tmp_path / "transparent.pdf"
+    source = tmp_path / "opaque-smask-with-unknown-key.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_transparent_image_pdf(transparent)
+    _rewrite_first_soft_mask(
+        transparent,
+        source,
+        extra_smask_key="/UnknownSemanticKey",
+    )
 
     result = fit_image_heavy_pdf(
         source,

@@ -65,6 +65,12 @@ _PRESERVED_IMAGE_KEYS = {
     "/ID", "/OPI", "/Metadata", "/OC",
 }
 _REJECTED_IMAGE_KEYS = {"/Decode", "/Mask", "/ImageMask", "/SMaskInData"}
+_ALLOWED_OPAQUE_SMASK_KEYS = {
+    "/Type", "/Subtype", "/Width", "/Height", "/ColorSpace",
+    "/BitsPerComponent", "/Filter", "/DecodeParms", "/Length",
+    "/Decode", "/Interpolate", "/Intent", "/Alternates", "/Name",
+    "/StructParent", "/ID", "/OPI",
+}
 
 
 def _resolve_pdf_obj(obj: Any) -> Any:
@@ -141,6 +147,10 @@ def _decode_is_identity_gray(decode: Any) -> bool:
 def _is_redundant_opaque_smask(smask: Any, *, width: int, height: int) -> bool:
     smask_obj = _resolve_pdf_obj(smask)
     if not isinstance(smask_obj, StreamObject) or smask_obj.get("/Subtype") != "/Image":
+        return False
+    if {str(key) for key in smask_obj.keys()} - _ALLOWED_OPAQUE_SMASK_KEYS:
+        return False
+    if "/Type" in smask_obj and smask_obj.get("/Type") != "/XObject":
         return False
     if _simple_colorspace(smask_obj) != "/DeviceGray":
         return False
