@@ -126,6 +126,21 @@ def _generate_gray_vector_pdf(path: Path) -> None:
         writer.write(output)
 
 
+def _generate_chroma_vector_pdf(path: Path, *, thin: bool) -> None:
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=595, height=842)
+    drawing = b"0 G\n0.5 w\n" + (b"40 40 m 540 790 l S\n" * 8_000)
+    if thin:
+        drawing += b"1 0 0 rg 100 100 0.5 12 re f\n"
+    else:
+        drawing += b"0 0 1 rg 100 100 100 100 re f\n"
+    stream = DecodedStreamObject()
+    stream.set_data(drawing)
+    page.replace_contents(stream)
+    with path.open("wb") as output:
+        writer.write(output)
+
+
 def _non_pdfa_metadata() -> DecodedStreamObject:
     metadata = DecodedStreamObject()
     metadata.set_data(b"<metadata>synthetic non-PDF/A metadata</metadata>")
@@ -137,6 +152,42 @@ def _rewrite(source: Path, destination: Path, mutate) -> None:
     mutate(writer)
     with destination.open("wb") as output:
         writer.write(output)
+
+
+def _raw_writer_pages_root(
+    writer: PdfWriter,
+) -> tuple[object, DictionaryObject]:
+    root_reference = writer.root_object.raw_get("/Pages")
+    root = root_reference.get_object()
+    assert isinstance(root, DictionaryObject)
+    return root_reference, root
+
+
+def _add_nested_pages_node(
+    writer: PdfWriter,
+    *,
+    custom_key: str | None = None,
+) -> None:
+    root_reference, root = _raw_writer_pages_root(writer)
+    kids = root.raw_get("/Kids")
+    assert isinstance(kids, ArrayObject) and len(kids) == 1
+    leaf_reference = kids[0]
+    nested = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Pages"),
+            NameObject("/Parent"): root_reference,
+            NameObject("/Kids"): ArrayObject([leaf_reference]),
+            NameObject("/Count"): NumberObject(1),
+        }
+    )
+    if custom_key is not None:
+        nested[NameObject(custom_key)] = NumberObject(1)
+    nested_reference = writer._add_object(nested)
+    leaf = leaf_reference.get_object()
+    assert isinstance(leaf, DictionaryObject)
+    leaf[NameObject("/Parent")] = nested_reference
+    root[NameObject("/Kids")] = ArrayObject([nested_reference])
+    root[NameObject("/Count")] = NumberObject(1)
 
 
 def _fit_target(source: Path) -> int:
@@ -637,6 +688,84 @@ def test_existing_black_white_vector_fixture_remains_eligible(tmp_path: Path) ->
     assert output.exists()
 
 
+@pytest.mark.parametrize("thin", [True, False])
+def test_300dpi_chroma_gate_refuses_saturated_features(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    thin: bool,
+) -> None:
+    source = tmp_path / ("thin-chroma.pdf" if thin else "material-chroma.pdf")
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_chroma_vector_pdf(source, thin=thin)
+    _force_vector_monochrome_diagnosis(monkeypatch)
+
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert "material chroma at 300 dpi" in result.reasons[0]
+    assert "RGB channel spread >= 16" in result.reasons[0]
+    assert not output.exists()
+
+
+def test_300dpi_chroma_inspection_failure_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_vector_pdf(source)
+    _force_vector_monochrome_diagnosis(monkeypatch)
+
+    def fail_chroma_inspection(_image: Image.Image) -> bool:
+        raise RuntimeError("synthetic RGB inspection failure")
+
+    monkeypatch.setattr(monochrome_fit, "_has_material_chroma", fail_chroma_inspection)
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert "300 dpi RGB chroma" in result.reasons[0]
+    assert "RuntimeError" in result.reasons[0]
+    assert not output.exists()
+
+
+def test_candidate_rendering_remains_grayscale_then_pillow_one_bit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "output.pdf"
+    _generate_vector_pdf(source)
+    _force_vector_monochrome_diagnosis(monkeypatch)
+
+    probe_pdf = pypdfium2.PdfDocument(str(source))
+    probe_page = probe_pdf[0]
+    page_type = type(probe_page)
+    probe_page.close()
+    probe_pdf.close()
+    original_render = page_type.render
+    original_convert = Image.Image.convert
+    grayscale_arguments: list[bool | None] = []
+    conversion_modes: list[str | None] = []
+
+    def record_render(page, *args, **kwargs):
+        grayscale_arguments.append(kwargs.get("grayscale"))
+        return original_render(page, *args, **kwargs)
+
+    def record_convert(image, mode=None, *args, **kwargs):
+        conversion_modes.append(mode)
+        return original_convert(image, mode, *args, **kwargs)
+
+    monkeypatch.setattr(page_type, "render", record_render)
+    monkeypatch.setattr(Image.Image, "convert", record_convert)
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
+
+    assert result.status is MonochromeFitStatus.FITTED
+    assert grayscale_arguments[-1] is True
+    assert conversion_modes[-1] == "1"
+    assert False in grayscale_arguments
+    assert output.exists()
+
+
 def test_exact_render_size_is_accepted() -> None:
     monochrome_fit._require_render_size_within_rounding_tolerance(
         (1750, 2480),
@@ -763,6 +892,196 @@ def test_page_count_size_and_rotation_are_preserved(tmp_path: Path) -> None:
         tuple(float(v) for v in p.mediabox) for p in source_reader.pages
     ]
     assert [int(p.get("/Rotate", 0)) for p in output_reader.pages] == [0, 90]
+
+
+def test_raw_page_tree_refuses_unknown_root_pages_key(tmp_path: Path) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "custom-root-pages.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_vector_pdf(base)
+
+    def mutate(writer: PdfWriter) -> None:
+        _, root = _raw_writer_pages_root(writer)
+        root[NameObject("/CustomPagesSemantics")] = NumberObject(1)
+
+    _rewrite(base, source, mutate)
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert "/CustomPagesSemantics" in result.reasons[0]
+    assert not output.exists()
+
+
+def test_raw_page_tree_refuses_unknown_nested_pages_key(tmp_path: Path) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "custom-nested-pages.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_vector_pdf(base)
+    _rewrite(
+        base,
+        source,
+        lambda writer: _add_nested_pages_node(
+            writer,
+            custom_key="/CustomPagesSemantics",
+        ),
+    )
+
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert "/CustomPagesSemantics" in result.reasons[0]
+    assert not output.exists()
+
+
+def test_raw_page_tree_refuses_count_mismatch(tmp_path: Path) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "bad-count.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_vector_pdf(base)
+
+    def mutate(writer: PdfWriter) -> None:
+        _, root = _raw_writer_pages_root(writer)
+        root[NameObject("/Count")] = NumberObject(2)
+
+    _rewrite(base, source, mutate)
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert "/Count" in result.reasons[0]
+    assert "discovered leaf count" in result.reasons[0]
+    assert not output.exists()
+
+
+def test_raw_page_tree_refuses_parent_mismatch(tmp_path: Path) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "bad-parent.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_vector_pdf(base)
+
+    def mutate(writer: PdfWriter) -> None:
+        _, root = _raw_writer_pages_root(writer)
+        kids = root.raw_get("/Kids")
+        assert isinstance(kids, ArrayObject) and len(kids) == 1
+        leaf = kids[0].get_object()
+        wrong_parent = writer._add_object(
+            DictionaryObject(
+                {
+                    NameObject("/Type"): NameObject("/Pages"),
+                    NameObject("/Kids"): ArrayObject(),
+                    NameObject("/Count"): NumberObject(0),
+                }
+            )
+        )
+        leaf[NameObject("/Parent")] = wrong_parent
+
+    _rewrite(base, source, mutate)
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert "/Parent does not match" in result.reasons[0]
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("malformation", ["duplicate-leaf", "repeated-node", "cycle"])
+def test_raw_page_tree_refuses_repeated_identity_or_cycle(
+    tmp_path: Path,
+    malformation: str,
+) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / f"{malformation}.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_vector_pdf(base)
+
+    def mutate(writer: PdfWriter) -> None:
+        root_reference, root = _raw_writer_pages_root(writer)
+        if malformation == "repeated-node":
+            _add_nested_pages_node(writer)
+            _, root = _raw_writer_pages_root(writer)
+        kids = root.raw_get("/Kids")
+        assert isinstance(kids, ArrayObject) and len(kids) == 1
+        repeated_reference = root_reference if malformation == "cycle" else kids[0]
+        kids.append(repeated_reference)
+        root[NameObject("/Count")] = NumberObject(2)
+
+    _rewrite(base, source, mutate)
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert "repeats an object identity or contains a cycle" in result.reasons[0]
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("node_type", [None, "/Invalid"])
+def test_raw_page_tree_refuses_missing_or_invalid_type(
+    tmp_path: Path,
+    node_type: str | None,
+) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "bad-type.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    _generate_vector_pdf(base)
+
+    def mutate(writer: PdfWriter) -> None:
+        _, root = _raw_writer_pages_root(writer)
+        if node_type is None:
+            del root[NameObject("/Type")]
+        else:
+            root[NameObject("/Type")] = NameObject(node_type)
+
+    _rewrite(base, source, mutate)
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+
+    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert "missing or invalid /Type" in result.reasons[0]
+    assert not output.exists()
+
+
+def test_raw_page_tree_accepts_inherited_rotation_and_preserves_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "inherited-rotation.pdf"
+    output = tmp_path / "output.pdf"
+    _generate_vector_pdf(base)
+
+    def mutate(writer: PdfWriter) -> None:
+        _, root = _raw_writer_pages_root(writer)
+        leaf = writer.pages[0]
+        leaf.pop(NameObject("/Rotate"), None)
+        root[NameObject("/Rotate")] = NumberObject(90)
+
+    _rewrite(base, source, mutate)
+    _force_vector_monochrome_diagnosis(monkeypatch)
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
+
+    assert result.status is MonochromeFitStatus.FITTED
+    assert int(PdfReader(str(output)).pages[0].get("/Rotate", 0)) == 90
+
+
+def test_raw_page_tree_accepts_inherited_mediabox_and_preserves_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "inherited-mediabox.pdf"
+    output = tmp_path / "output.pdf"
+    _generate_vector_pdf(base, page_specs=((420.0, 595.0, 0),))
+
+    def mutate(writer: PdfWriter) -> None:
+        _, root = _raw_writer_pages_root(writer)
+        leaf = writer.pages[0]
+        mediabox = leaf.raw_get("/MediaBox")
+        del leaf[NameObject("/MediaBox")]
+        root[NameObject("/MediaBox")] = mediabox
+
+    _rewrite(base, source, mutate)
+    _force_vector_monochrome_diagnosis(monkeypatch)
+    result = fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
+
+    assert result.status is MonochromeFitStatus.FITTED
+    output_box = tuple(float(value) for value in PdfReader(str(output)).pages[0].mediabox)
+    assert output_box == (0.0, 0.0, 420.0, 595.0)
 
 
 @pytest.mark.parametrize(

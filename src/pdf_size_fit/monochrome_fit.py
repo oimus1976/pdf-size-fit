@@ -34,6 +34,7 @@ NEAR_WHITE_MIN = 247
 MIDTONE_SUPPORT_FILTER_SIZE = 5
 MIDTONE_PERSISTENCE_FILTER_SIZE = 3
 MAX_RENDER_SIZE_ROUNDING_DELTA = 1
+MATERIAL_CHROMA_CHANNEL_SPREAD = 16
 MAX_SEARCHABLE_TEXT_CHARS_PER_PAGE = 8
 MAX_SEARCHABLE_TEXT_LINES_PER_PAGE = 1
 MAX_SEARCHABLE_TEXT_CHARS_PER_DOCUMENT = 256
@@ -49,6 +50,18 @@ ALLOWED_PAGE_KEYS = frozenset(
         "/Rotate",
         "/UserUnit",
         "/Annots",
+    }
+)
+ALLOWED_PAGES_NODE_KEYS = frozenset(
+    {
+        "/Type",
+        "/Parent",
+        "/Kids",
+        "/Count",
+        "/Resources",
+        "/MediaBox",
+        "/CropBox",
+        "/Rotate",
     }
 )
 
@@ -94,6 +107,10 @@ class _PageSpec:
     @property
     def height(self) -> float:
         return self.mediabox[3] - self.mediabox[1]
+
+
+class _PageTreeRefusal(Exception):
+    pass
 
 
 def _resolve(obj: Any) -> Any:
@@ -157,6 +174,162 @@ def _pdfa_refusal(root: DictionaryObject) -> str | None:
 
 def _same_box(first: tuple[float, ...], second: tuple[float, ...]) -> bool:
     return all(a == b for a, b in zip(first, second))
+
+
+_PageTreeIdentity = tuple[int, int, int]
+
+
+def _page_tree_identity(
+    reference: Any,
+    reader: PdfReader,
+    context: str,
+) -> _PageTreeIdentity:
+    if not isinstance(reference, IndirectObject) or reference.pdf is not reader:
+        raise _PageTreeRefusal(
+            f"{context} does not have a reliable source-object identity"
+        )
+    if (
+        isinstance(reference.idnum, bool)
+        or not isinstance(reference.idnum, int)
+        or reference.idnum <= 0
+        or isinstance(reference.generation, bool)
+        or not isinstance(reference.generation, int)
+        or reference.generation < 0
+    ):
+        raise _PageTreeRefusal(f"{context} has an invalid indirect-object identity")
+    return (id(reference.pdf), reference.idnum, reference.generation)
+
+
+def _raw_page_tree_refusal(reader: PdfReader, root: DictionaryObject) -> str | None:
+    try:
+        if "/Pages" not in root:
+            raise _PageTreeRefusal("PDF catalog does not contain a raw /Pages reference")
+        root_reference = root.raw_get("/Pages")
+        root_identity = _page_tree_identity(
+            root_reference,
+            reader,
+            "catalog /Pages root",
+        )
+        seen: set[_PageTreeIdentity] = set()
+        raw_leaf_identities: list[_PageTreeIdentity] = []
+
+        def visit(
+            reference: Any,
+            parent_identity: _PageTreeIdentity | None,
+            *,
+            is_root: bool,
+        ) -> int:
+            context = "catalog /Pages root" if is_root else "page-tree child"
+            identity = _page_tree_identity(reference, reader, context)
+            if identity in seen:
+                raise _PageTreeRefusal(
+                    "raw page tree repeats an object identity or contains a cycle"
+                )
+            seen.add(identity)
+
+            node = _resolve(reference)
+            if not isinstance(node, DictionaryObject):
+                raise _PageTreeRefusal(f"{context} is not a readable dictionary")
+            node_type = node.get("/Type")
+            if node_type not in ("/Pages", "/Page"):
+                raise _PageTreeRefusal(
+                    f"{context} has missing or invalid /Type {node_type!r}"
+                )
+            if is_root and node_type != "/Pages":
+                raise _PageTreeRefusal("catalog /Pages root is not /Type /Pages")
+
+            if is_root:
+                if "/Parent" in node:
+                    raise _PageTreeRefusal(
+                        "catalog /Pages root must not contain /Parent"
+                    )
+            else:
+                if "/Parent" not in node:
+                    raise _PageTreeRefusal(f"raw {node_type} child is missing /Parent")
+                actual_parent = _page_tree_identity(
+                    node.raw_get("/Parent"),
+                    reader,
+                    f"raw {node_type} child /Parent",
+                )
+                if actual_parent != parent_identity:
+                    raise _PageTreeRefusal(
+                        f"raw {node_type} child /Parent does not match traversal parent"
+                    )
+
+            if node_type == "/Page":
+                unsupported_leaf_keys = sorted(
+                    str(key) for key in node.keys() if key not in ALLOWED_PAGE_KEYS
+                )
+                if unsupported_leaf_keys:
+                    raise _PageTreeRefusal(
+                        "raw /Page leaf contains unsupported dictionary keys that "
+                        "are not reconstructed: " + ", ".join(unsupported_leaf_keys)
+                    )
+                raw_leaf_identities.append(identity)
+                return 1
+
+            unsupported_node_keys = sorted(
+                str(key) for key in node.keys() if key not in ALLOWED_PAGES_NODE_KEYS
+            )
+            if unsupported_node_keys:
+                raise _PageTreeRefusal(
+                    "raw /Pages node contains unsupported dictionary keys that are "
+                    "not reconstructed: " + ", ".join(unsupported_node_keys)
+                )
+            if "/Kids" not in node:
+                raise _PageTreeRefusal("raw /Pages node is missing /Kids")
+            kids = _resolve(node.raw_get("/Kids"))
+            if not isinstance(kids, (ArrayObject, list)):
+                raise _PageTreeRefusal("raw /Pages /Kids is not a readable array")
+            if "/Count" not in node:
+                raise _PageTreeRefusal("raw /Pages node is missing /Count")
+            count = _resolve(node.raw_get("/Count"))
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise _PageTreeRefusal(
+                    "raw /Pages /Count is not a non-negative integer"
+                )
+
+            descendant_count = sum(
+                visit(kid, identity, is_root=False) for kid in kids
+            )
+            if count != descendant_count:
+                raise _PageTreeRefusal(
+                    f"raw /Pages /Count {count} does not match discovered leaf "
+                    f"count {descendant_count}"
+                )
+            return descendant_count
+
+        visit(root_reference, None, is_root=True)
+
+        try:
+            flattened_pages = tuple(reader.pages)
+        except Exception as exc:
+            raise _PageTreeRefusal(
+                "pypdf could not flatten the validated raw page tree reliably "
+                f"({type(exc).__name__})"
+            ) from exc
+        flattened_identities = tuple(
+            _page_tree_identity(
+                page.indirect_reference,
+                reader,
+                f"flattened page {index}",
+            )
+            for index, page in enumerate(flattened_pages, start=1)
+        )
+        if flattened_identities != tuple(raw_leaf_identities):
+            raise _PageTreeRefusal(
+                "raw page-tree leaf order/count/identity disagrees with flattened pages"
+            )
+        if root_identity not in seen:
+            raise _PageTreeRefusal("catalog /Pages root identity was not traversed")
+    except _PageTreeRefusal as exc:
+        return str(exc)
+    except Exception as exc:
+        return (
+            "raw page tree could not be inspected reliably "
+            f"({type(exc).__name__})"
+        )
+    return None
 
 
 def _read_page_specs(reader: PdfReader) -> tuple[tuple[_PageSpec, ...] | None, str | None]:
@@ -278,6 +451,10 @@ def _preflight(reader: PdfReader) -> tuple[tuple[_PageSpec, ...] | None, str | N
             "PDF catalog contains unsupported keys that are not reconstructed: "
             + ", ".join(unsupported_catalog_keys)
         )
+
+    page_tree_reason = _raw_page_tree_refusal(reader, root)
+    if page_tree_reason is not None:
+        return None, page_tree_reason
 
     return _read_page_specs(reader)
 
@@ -404,6 +581,33 @@ def _has_persistent_unsupported_midtone(grayscale: Image.Image) -> bool:
                 image.close()
 
 
+def _has_material_chroma(rgb: Image.Image) -> bool:
+    channels = rgb.split()
+    try:
+        if len(channels) != 3:
+            raise RuntimeError("RGB inspection did not produce exactly three channels")
+        for first, second in ((0, 1), (0, 2), (1, 2)):
+            difference = ImageChops.difference(channels[first], channels[second])
+            try:
+                extrema = difference.getextrema()
+                if (
+                    not isinstance(extrema, tuple)
+                    or len(extrema) != 2
+                    or not all(isinstance(value, int) for value in extrema)
+                ):
+                    raise RuntimeError(
+                        "RGB channel spread could not be inspected reliably"
+                    )
+                if extrema[1] >= MATERIAL_CHROMA_CHANNEL_SPREAD:
+                    return True
+            finally:
+                difference.close()
+        return False
+    finally:
+        for channel in channels:
+            channel.close()
+
+
 def _require_render_size_within_rounding_tolerance(
     actual_size: tuple[int, int],
     expected_size: tuple[int, int],
@@ -433,6 +637,8 @@ def _bilevel_suitability_refusal(
                 raise RuntimeError("PDFium and pypdf disagree on the source page count")
             for index, spec in enumerate(page_specs, start=1):
                 source_page = pdf[index - 1]
+                rgb_bitmap = None
+                rgb = None
                 bitmap = None
                 grayscale = None
                 try:
@@ -441,6 +647,33 @@ def _bilevel_suitability_refusal(
                         raise RuntimeError(
                             f"page {index} rotation differs between PDF readers"
                         )
+                    expected_size = (
+                        ceil(spec.width * FIXED_DPI / 72.0),
+                        ceil(spec.height * FIXED_DPI / 72.0),
+                    )
+                    rgb_bitmap = source_page.render(
+                        scale=FIXED_DPI / 72.0,
+                        rotation=(-normalized_rotation) % 360,
+                        grayscale=False,
+                        draw_annots=False,
+                    )
+                    rgb = rgb_bitmap.to_pil().convert("RGB")
+                    _require_render_size_within_rounding_tolerance(
+                        rgb.size,
+                        expected_size,
+                        index,
+                    )
+                    if _has_material_chroma(rgb):
+                        return (
+                            f"page {index} contains material chroma at {FIXED_DPI} "
+                            "dpi: at least one pixel has RGB channel spread "
+                            f">= {MATERIAL_CHROMA_CHANNEL_SPREAD}"
+                        )
+                    rgb.close()
+                    rgb = None
+                    rgb_bitmap.close()
+                    rgb_bitmap = None
+
                     bitmap = source_page.render(
                         scale=FIXED_DPI / 72.0,
                         rotation=(-normalized_rotation) % 360,
@@ -448,10 +681,6 @@ def _bilevel_suitability_refusal(
                         draw_annots=False,
                     )
                     grayscale = bitmap.to_pil().convert("L")
-                    expected_size = (
-                        ceil(spec.width * FIXED_DPI / 72.0),
-                        ceil(spec.height * FIXED_DPI / 72.0),
-                    )
                     _require_render_size_within_rounding_tolerance(
                         grayscale.size,
                         expected_size,
@@ -477,13 +706,17 @@ def _bilevel_suitability_refusal(
                         grayscale.close()
                     if bitmap is not None:
                         bitmap.close()
+                    if rgb is not None:
+                        rgb.close()
+                    if rgb_bitmap is not None:
+                        rgb_bitmap.close()
                     source_page.close()
         finally:
             pdf.close()
     except Exception as exc:
         return (
-            "300 dpi bilevel edge-locality rendering or inspection could not be "
-            f"completed reliably ({type(exc).__name__})"
+            "300 dpi RGB chroma or bilevel edge-locality rendering or inspection "
+            f"could not be completed reliably ({type(exc).__name__})"
         )
     return None
 
@@ -776,7 +1009,7 @@ def fit_monochrome_vector_pdf(
             input_path,
             input_size=input_size,
             target_bytes=target_bytes,
-            page_count=0 if reader.is_encrypted else len(reader.pages),
+            page_count=0,
             reasons=(refusal or "document failed the destructive-rasterization safety gate",),
         )
 
