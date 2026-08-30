@@ -1,12 +1,20 @@
 # Project Status
 
-Last updated: 2026-08-29
+Last updated: 2026-08-31
 
 ## Current phase
 
 **Experimental / PoC**
 
 The project is validating whether oversized PDFs can be automatically classified and fitted under a target attachment limit without forcing users to understand PDF internals or compression parameters.
+
+## Integrated automatic fitting backend
+
+The backend now provides one `fit_pdf` API and one `pdf-size-fit` command that accept an input PDF, a separate output path, and a configurable byte target (default `10_000_000`). The integrated layer uses the existing diagnosis and automatically delegates `image-heavy` and `vector-monochrome` inputs to their existing fitters. It does not require callers to select a PDF-internal route.
+
+The integration is orchestration only. `skip` succeeds without creating output; `vector-color` and `unclassified` remain unsupported and fail closed without creating output. Delegated refusals and target failures are normalized as non-success while retaining the route-specific status and result evidence.
+
+Existing safety policy is unchanged: image minimum-quality behavior is preserved, image downsampling defaults off at `min_scale=1.0`, monochrome rendering remains fixed at 300 dpi, and small searchable-text rasterization remains explicit opt-in and off by default. The integration does not pre-create destinations, overwrite inputs or existing destinations, delete originals, add a compression route, or introduce a product-wide target safety margin.
 
 ## Validated compression routes so far
 
