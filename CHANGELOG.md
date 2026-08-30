@@ -39,6 +39,12 @@ The project is currently experimental and does not yet use formal releases.
 - Regression coverage ensuring fully opaque soft masks with `/OC` or unknown dictionary keys are not treated as safely removable.
 - Recorded 31-test validation in the dedicated supported local venv, plus GitHub Actions success on Python 3.11 and 3.12 for the safety-fix code head.
 - Sample-specific real-world forced-downsampling and fixed-condition render-validation evidence; detailed measurements are in `docs/TEST_MATRIX.md`.
+- Fail-closed monochrome-vector execution module and CLI using fixed 300 dpi PDFium rendering, 1-bit conversion, and CCITT Group 4 encoding with no DPI search.
+- Synthetic monochrome-route regression coverage for successful fitting, immutable inputs, exclusive destinations, route/target outcomes, structural preservation, and destructive-rasterization safety refusals.
+- Dual-parser bounded opt-in for rasterizing a small searchable text layer, with per-page equality and independent pypdf/PDFium boundary coverage.
+- Fixed-300-dpi persistent bilateral midtone coverage for hard black/white content, narrow antialias transitions, gray stripes/patches at the provisional boundary, material gray regions, and fail-closed inspection errors.
+- Raw page-tree regression coverage for node allowlists, identity/tree invariants, descendant counts, flattened-order agreement, and valid inherited MediaBox/Rotate behavior.
+- Fixed-300-dpi RGB chroma-gate coverage for thin and material saturated features, fail-closed inspection, and unchanged grayscale-to-1-bit candidate rendering.
 
 ### Changed
 
@@ -56,6 +62,11 @@ The project is currently experimental and does not yet use formal releases.
 - Downsampling may now remove a redundant `/SMask` only when source preflight and writer-side revalidation strictly prove that it is fully opaque; writer revalidation fails closed and does not assume cloned indirect object IDs remain stable.
 - Fully opaque soft masks are now accepted as removable only when their image dictionaries contain a strict allowlist of known-safe keys; optional-content, metadata, and unknown semantics fail closed.
 - Original-retention requirements now explicitly prohibit automatic input deletion or replacement and avoid unsolicited backup copies; compression is an irreversible derivative whose retention handling belongs to the adopting organization's document-management rules.
+- Monochrome execution now requires the existing `vector-monochrome` diagnosis for the same target and rejects unsupported document semantics before diagnosis rendering.
+- Monochrome bilevel preflight now rejects a 3x3-persistent unsupported-midtone region whose centers lack bilateral near-black/near-white support in a 5x5 neighborhood at 300 dpi, instead of using the provisional 72-dpi raw-midtone percentage rule.
+- Searchable text remains refused by default; explicit opt-in requires both pypdf and PDFium independently to stay within 8 non-whitespace characters and one non-empty line per page and 256 non-whitespace characters per document and to agree exactly on normalized page metrics, with accepted results recording loss of selectable/searchable and search/copy semantics.
+- Monochrome structural preflight now walks the raw `/Pages` tree before flattened pages are trusted, rejecting unknown node/leaf semantics, malformed types/counts/parent links, identity uncertainty, repeated nodes/cycles/duplicate leaves, and raw-to-flattened order disagreement.
+- Monochrome destructive safety now rejects any fixed-300-dpi RGB pixel with channel spread at least 16 before the separate grayscale/bilevel inspection; no area-percentage threshold is used, and candidate rendering remains `grayscale=True` then `.convert("1")`.
 
 ### Notes
 
@@ -68,3 +79,5 @@ The project is currently experimental and does not yet use formal releases.
 - `min_scale` is a relative source-pixel floor, not an effective-DPI or readability guarantee. The current fallback also applies one selected scale to all supported images in the document.
 - The resolution-first scale/quality policy is provisional and does not claim to maximize perceptual quality across different content types.
 - Whether a compressed electronic-approval attachment is an authoritative or retained record depends on the adopting organization's rules; the project does not generalize that it is always the original or legally controlling copy.
+- The monochrome-vector route is fixed at 300 dpi; a non-fitting candidate returns `target-not-met` with no output instead of searching lower resolutions.
+- The dual-parser small-text limits, RGB channel-spread threshold, and persistent bilateral rule are provisional PoC guardrails, not general policy, color-science, or quality guarantees; sub-3-pixel grayscale detail at 300 dpi may be binarized.

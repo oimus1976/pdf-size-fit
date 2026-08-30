@@ -104,15 +104,24 @@ Fixed-condition PDFium rendering via pypdfium2 4.30.0 completed for all 11 sourc
 
 ## Route B: monochrome abnormal vector/outline PDFs
 
-Working hypothesis:
+Current PoC execution boundary:
 
-- Detect PDFs where image streams do not explain the size but page content streams are unusually large.
-- Confirm that rendered pages are effectively monochrome.
-- Render with PDFium at a high-enough resolution.
-- Convert to 1-bit and encode image XObjects with `/CCITTFaxDecode` Group 4 settings.
-- Prefer higher DPI when it already satisfies the target.
+1. Return `skip` without writing output when the source is already at or below the target.
+2. Before any diagnosis or execution rendering, reject encryption, signature/certification structures, any AcroForm presence, embedded or associated files, annotations, PDF/A identification, outlines/bookmarks and unsupported document-level navigation semantics.
+3. Reject page geometry that cannot be reproduced safely, including invalid dimensions/rotation, a CropBox different from the MediaBox, additional page boxes, and a non-default UserUnit.
+4. Apply strict dictionary allowlists after the specific refusals. The catalog may contain only `/Type` and `/Pages`. Before flattened pages are trusted, recursively walk the raw page tree by reliable indirect identity: the root must be `/Pages` without `/Parent`; nested `/Pages` nodes may contain only `/Type`, `/Parent`, `/Kids`, `/Count`, `/Resources`, `/MediaBox`, `/CropBox`, and `/Rotate`; raw `/Page` leaves retain the existing leaf allowlist. Require exact node types, matching parent links and descendant counts, no repeated identity/cycle/duplicate leaf, and exact raw leaf identity/order agreement with pypdf's flattened sequence. Inherited MediaBox/Rotate are allowed, then validated through the existing effective geometry checks. Reject uncertainty or any other known/unknown key rather than repairing or silently dropping semantics.
+5. Require the existing diagnosis to return `vector-monochrome` for the same byte target. A different route returns `route-mismatch` before monochrome-specific text or bilevel inspection. Execution does not make an independent monochrome guess.
+6. Inspect text independently with pypdf and PDFium. Refuse by default if either parser detects non-whitespace text. The explicit opt-in requires each parser independently to stay within 8 non-whitespace characters and one non-empty line per page and 256 non-whitespace characters per document, using identical `isspace()` / `splitlines()` / `strip()` normalization. Require exact equality of every page's `(characters, lines)` tuple. Parser exceptions, unavailable text pages, non-string results, and disagreement fail closed. The numeric bounds are provisional PoC guardrails, not a general policy or quality guarantee.
+7. Render every page with PDFium at fixed 300 dpi in RGB, with annotations disabled and the same rotation compensation used for execution. Refuse if any pixel has RGB channel spread at least 16; no page-area percentage threshold can exempt a small saturated feature. Then make a separate grayscale render and apply the existing bilateral rule: luminance 0..32 is near-black, 33..246 is midtone, and 247..255 is near-white; Pillow 5x5 minimum/maximum filters determine both supports and a 3x3 minimum filter removes non-persistent unsupported midtones. Any survivor refuses. Both renders must match MediaBox-derived pixel dimensions within one pixel per axis; two or more pixels fails closed. Rendering, dimensions, pixel/color access, or filtering uncertainty fails closed. The chroma threshold and bilateral rule are provisional PoC guardrails, not general color-science or quality guarantees. No percentage threshold remains, and sub-3-pixel grayscale detail at 300 dpi may be binarized.
+8. Render every candidate page separately with PDFium `grayscale=True` at exactly 300 dpi and use Pillow `.convert("1")`, compensating for source rotation while retaining the original `/Rotate`; the RGB safety render does not replace or alter this candidate path.
+9. Convert each render to 1-bit monochrome and require a `/CCITTFaxDecode` image with Group 4 `/K -1` parameters.
+10. Rebuild each page as one image while retaining its exact MediaBox dimensions and rotation.
+11. Reopen and verify page count, MediaBox dimensions, rotation, image encoding and final byte size before accepting the candidate.
+12. Copy an accepted candidate from temporary storage by exclusively creating the destination; never overwrite the source or an existing output.
 
-This route intentionally sacrifices text search/copy and vector scalability, so it should be treated as a fallback for PDFs whose existing representation is pathologically large.
+There is deliberately no DPI search. If the fixed 300-dpi candidate exceeds the target, the route returns `target-not-met` and writes no output. Lower-DPI behavior requires separate quality validation.
+
+This route intentionally sacrifices vector scalability. It also removes selectable/searchable and search/copy semantics when the bounded text opt-in is used, so accepted results state that loss explicitly. The dual-parser text bounds and persistent bilateral rule remain conservative PoC guardrails rather than general document-policy or image-quality guarantees; later relaxation requires separately reviewed evidence.
 
 ## Route C: color abnormal vector/outline PDFs
 

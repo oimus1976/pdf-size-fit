@@ -42,6 +42,18 @@ Validated against the current representative samples with a 10,000,000-byte targ
 
 The classifier also provides `unclassified` and does not guess a destructive route when no current threshold is met.
 
+## Monochrome vector compression execution PoC
+
+The route-specific execution PoC now reproduces only the validated fixed condition: PDFium rendering at 300 dpi, 1-bit monochrome conversion, and CCITT Group 4 encoding. It requires the existing diagnosis to select `vector-monochrome` for the same target and does not search DPI. A 300-dpi candidate that remains above the target returns `target-not-met` without an output file.
+
+Because this is destructive whole-page rasterization, a structural preflight gate runs before diagnosis rendering. It refuses encryption, signatures/certification permissions, any AcroForm, embedded/associated files, annotations, PDF/A identification, outlines/bookmarks, unsupported document-level navigation semantics, and page geometry outside the currently proven boundary. Minimal catalog, raw `/Pages` node, and leaf-page allowlists reject every dictionary key the route does not reconstruct. The raw page-tree traversal also validates indirect identity, type, parent links, descendant counts, uniqueness/acyclicity, and exact raw-to-flattened leaf order; inherited MediaBox and Rotate remain accepted only when their effective flattened values pass the existing geometry checks.
+
+Text rasterization has a separate explicit opt-in. pypdf and PDFium must each independently remain within 8 non-whitespace characters and one non-empty line per page and 256 non-whitespace characters per document, and their normalized per-page `(characters, lines)` metrics must agree exactly. Parser uncertainty or disagreement fails closed, and accepted output records that selectable/searchable and search/copy semantics were lost. The numeric limits are provisional PoC guardrails, not a general policy or quality guarantee.
+
+At execution resolution the safety gate first renders every page separately in RGB at fixed 300 dpi and refuses if any pixel has channel spread at least 16; there is no area-percentage exemption for a small saturated mark. It then performs the existing separate 300-dpi grayscale inspection. For each luminance-33..246 midtone it uses Pillow 5x5 minimum/maximum filters to require both luminance-0..32 near-black and luminance-247..255 near-white support, then applies a 3x3 minimum filter to the unsupported mask. Any survivor refuses as a persistent region. The RGB threshold and bilateral rule are provisional PoC guardrails rather than general color-science or quality guarantees. RGB/grayscale rendering, dimensions, pixel access, or filtering uncertainty fails closed; both checks retain the one-pixel-per-axis raster-rounding allowance. Candidate output semantics remain PDFium `grayscale=True` followed by Pillow `.convert("1")`. Accepted output is reopened and checked for page count, MediaBox dimensions, rotation, 1-bit CCITT encoding, and target size before an exclusively created destination is retained.
+
+Synthetic fixtures cover the route and its refusal boundary without placing private municipal documents in the repository. The existing private 47-page sample remains a separate real-file validation gate, including representative small-text visual inspection; the earlier 2,215,863-byte result is comparison evidence rather than a byte-for-byte golden artifact.
+
 ## Image-heavy compression execution PoC
 
 The route-specific execution PoC now:
