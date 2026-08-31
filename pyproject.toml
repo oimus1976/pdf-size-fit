@@ -25,6 +25,9 @@ pdf-size-fit-diagnose = "pdf_size_fit.cli:main"
 pdf-size-fit-image = "pdf_size_fit.image_cli:main"
 pdf-size-fit-monochrome = "pdf_size_fit.monochrome_cli:main"
 
+[project.gui-scripts]
+pdf-size-fit-gui = "pdf_size_fit.gui:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

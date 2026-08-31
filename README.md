@@ -35,6 +35,21 @@ It returns success without writing output for `skip`, delegates `image-heavy` an
 
 The integrated command preserves the existing route controls and defaults. Image downsampling remains off unless `--min-scale` is set below `1.0`; `--min-quality` keeps the image route's existing default of `70`. Small searchable-text rasterization on the monochrome route remains off unless `--allow-small-searchable-text-rasterization` is explicitly supplied, and monochrome rendering remains fixed at 300 dpi.
 
+## Windows GUI quick start
+
+The source checkout includes a minimal Tkinter GUI for interactive use on Windows. Complete the one-time setup from PowerShell in the repository root:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+Then double-click `start-pdf-size-fit.cmd`. The launcher uses `.venv\Scripts\pythonw.exe` and shows setup instructions instead of silently closing if the expected runtime or installed project is missing. The same GUI is available through the `pdf-size-fit-gui` Python entry point.
+
+Choose an input PDF and a separate output path. The GUI suggests a non-existing `name-fit.pdf` (or numbered variant), uses decimal MB (`1 MB = 1,000,000 bytes`), and runs the existing integrated `fit_pdf` backend without duplicating route selection. Its defaults preserve the backend safety policy: 10 MB target, minimum JPEG quality 70, image scale 100% (downsampling off), and searchable-text rasterization unchecked. It never replaces or deletes the original or overwrites an existing destination.
+
+This GUI is a source-checkout usability MVP, not a packaged or distributable release. It is not an EXE or installer and does not auto-download dependencies at startup.
+
 The route-specific diagnosis and fitting commands below remain available.
 
 ## Diagnosis PoC
@@ -122,7 +137,7 @@ Only synthetic fixtures are included in the regression suite. Private municipal 
 
 ## Project stage
 
-This repository currently records experiments and design decisions. Backend libraries, license, packaging method, GUI, and release policy are **not yet finalized**.
+This repository currently records experiments and design decisions. Backend libraries, license, packaging method, and release policy are **not yet finalized**. The Windows GUI is only a source-checkout usability MVP, not a packaged release.
 
 Real municipal documents used during local testing must not be committed. Repository fixtures should be synthetic or otherwise safe to redistribute.
 

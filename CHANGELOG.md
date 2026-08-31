@@ -48,6 +48,10 @@ The project is currently experimental and does not yet use formal releases.
 - Fixed-300-dpi persistent bilateral midtone coverage for hard black/white content, narrow antialias transitions, gray stripes/patches at the provisional boundary, material gray regions, and fail-closed inspection errors.
 - Raw page-tree regression coverage for node allowlists, identity/tree invariants, descendant counts, flattened-order agreement, and valid inherited MediaBox/Rotate behavior.
 - Fixed-300-dpi RGB chroma-gate coverage for thin and material saturated features, fail-closed inspection, and unchanged grayscale-to-1-bit candidate rendering.
+- Minimal Windows-oriented Tkinter GUI that calls the integrated `fit_pdf` backend on a worker thread, preserves existing safe defaults, and reports Japanese status plus detailed backend evidence.
+- Collision-free output-name suggestions, exact decimal-MB conversion, input/option validation, and a successful-output folder shortcut without any replace/delete-original action.
+- Repository-root `start-pdf-size-fit.cmd` launcher using the local `.venv` Python GUI runtime with readable missing-setup failures, plus the `pdf-size-fit-gui` entry point.
+- Headless GUI-helper regression coverage for output safety, target conversion, exact backend argument mapping, status presentation, and launcher/entry-point configuration.
 
 ### Changed
 
