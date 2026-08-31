@@ -4,15 +4,23 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from pypdf import PdfWriter
 
 from pdf_size_fit.diagnose import Route
 from pdf_size_fit.fit import FitResult, FitStatus
 from pdf_size_fit.gui import (
+    ALREADY_BELOW_MESSAGE,
+    SIMPLE_TARGET_BYTES,
     build_request,
+    build_simple_request,
     decimal_mb_to_bytes,
+    parse_drop_paths,
     present_error,
     present_result,
+    present_simple_result,
     run_request,
+    run_simple_input,
+    run_simple_request,
     suggest_output_path,
 )
 
@@ -105,6 +113,110 @@ def test_gui_request_preserves_safe_defaults(tmp_path: Path) -> None:
     assert request.allow_small_searchable_text_rasterization is False
 
 
+def test_simple_request_fixes_target_and_keeps_destructive_options_off(tmp_path: Path) -> None:
+    source = tmp_path / "input.pdf"
+    source.write_bytes(b"synthetic")
+
+    request = build_simple_request(source)
+
+    assert SIMPLE_TARGET_BYTES == 10_000_000
+    assert request.target_bytes == 10_000_000
+    assert request.min_scale == 1.0
+    assert request.allow_small_searchable_text_rasterization is False
+    assert request.output_path == tmp_path / "input-fit.pdf"
+
+
+def test_simple_small_pdf_returns_exact_no_conversion_message_and_no_output(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "small.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    with source.open("wb") as stream:
+        writer.write(stream)
+
+    expected_output = tmp_path / "small-fit.pdf"
+    result = run_simple_input(source)
+    presentation = present_simple_result(result)
+
+    assert result.status is FitStatus.ALREADY_BELOW_TARGET
+    assert presentation.title == ALREADY_BELOW_MESSAGE
+    assert not expected_output.exists()
+
+
+def test_simple_exact_boundary_does_not_call_backend(tmp_path: Path) -> None:
+    source = tmp_path / "exactly-10mb.pdf"
+    source.write_bytes(b"%PDF-1.4\n" + b"0" * (10_000_000 - 9))
+    request = build_simple_request(source)
+
+    def unexpected(*args: object, **kwargs: object) -> FitResult:
+        pytest.fail("fit_pdf must not run for a file at the simple-mode limit")
+
+    result = run_simple_request(request, fitter=unexpected)
+
+    assert result.status is FitStatus.ALREADY_BELOW_TARGET
+    assert result.input_size_bytes == 10_000_000
+    assert result.output_path is None
+    assert not request.output_path.exists()
+
+
+def test_simple_oversized_input_maps_to_integrated_backend_once(tmp_path: Path) -> None:
+    source = tmp_path / "oversized.pdf"
+    with source.open("wb") as stream:
+        stream.truncate(10_000_001)
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def fitter(*args: object, **kwargs: object) -> FitResult:
+        calls.append((args, kwargs))
+        return _result(FitStatus.FITTED, delegated_route_status="fitted")
+
+    run_simple_input(source, fitter=fitter)
+
+    assert calls == [
+        (
+            (source, tmp_path / "oversized-fit.pdf"),
+            {
+                "target_bytes": 10_000_000,
+                "min_quality": 70,
+                "min_scale": 1.0,
+                "allow_small_searchable_text_rasterization": False,
+            },
+        )
+    ]
+
+
+def test_shell_argument_and_gui_drop_use_the_same_simple_backend_path(tmp_path: Path) -> None:
+    source = tmp_path / "name with spaces.pdf"
+    with source.open("wb") as stream:
+        stream.truncate(10_000_001)
+    drop_paths = parse_drop_paths(
+        "{name with spaces.pdf}", lambda _data: (str(source),)
+    )
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def fitter(*args: object, **kwargs: object) -> FitResult:
+        calls.append((args, kwargs))
+        return _result(FitStatus.FITTED, delegated_route_status="fitted")
+
+    run_simple_input(source, fitter=fitter)  # shell/startup argument
+    run_simple_input(drop_paths[0], fitter=fitter)  # GUI DND event
+
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+
+
+def test_simple_presentation_hides_backend_controls_and_route() -> None:
+    presentation = present_simple_result(
+        _result(FitStatus.FITTED, delegated_route_status="fitted")
+    )
+    visible = presentation.title + presentation.summary
+
+    assert "quality" not in visible.lower()
+    assert "scale" not in visible.lower()
+    assert "route" not in visible.lower()
+    assert "ルート" not in visible
+
+
 def test_gui_request_rejects_input_or_existing_output_as_destination(tmp_path: Path) -> None:
     source = tmp_path / "input.pdf"
     source.write_bytes(b"synthetic")
@@ -155,5 +267,10 @@ def test_launcher_and_gui_entry_point_exist() -> None:
     metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert ".venv\\Scripts\\pythonw.exe" in launcher
+    assert "-m pdf_size_fit.gui %*" in launcher
     assert "pause" in launcher.lower()
     assert metadata["project"]["gui-scripts"]["pdf-size-fit-gui"] == "pdf_size_fit.gui:main"
+    assert any(
+        dependency.startswith("tkinterdnd2")
+        for dependency in metadata["project"]["dependencies"]
+    )

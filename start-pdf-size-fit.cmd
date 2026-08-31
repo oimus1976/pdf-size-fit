@@ -11,7 +11,7 @@ if not exist "%APP_PYTHONW%" goto :missing_runtime
 "%APP_PYTHON%" -c "import pdf_size_fit.gui" >nul 2>&1
 if errorlevel 1 goto :missing_package
 
-start "PDF Size Fit" "%APP_PYTHONW%" -m pdf_size_fit.gui
+start "PDF Size Fit" "%APP_PYTHONW%" -m pdf_size_fit.gui %*
 exit /b 0
 
 :missing_runtime

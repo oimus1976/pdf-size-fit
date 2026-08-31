@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-08-31
+Last updated: 2026-09-01
 
 ## Current phase
 
@@ -16,13 +16,17 @@ The integration is orchestration only. `skip` succeeds without creating output; 
 
 Existing safety policy is unchanged: image minimum-quality behavior is preserved, image downsampling defaults off at `min_scale=1.0`, monochrome rendering remains fixed at 300 dpi, and small searchable-text rasterization remains explicit opt-in and off by default. The integration does not pre-create destinations, overwrite inputs or existing destinations, delete originals, add a compression route, or introduce a product-wide target safety margin.
 
-## Windows GUI usability MVP
+## Windows simple drag-and-drop GUI
 
-A minimal standard-library Tkinter GUI now wraps the integrated `fit_pdf` backend for interactive Windows use from a source checkout. It provides PDF input/output pickers, collision-free same-directory output suggestions, an exact decimal-MB target, the existing `min_quality`, `min_scale`, and searchable-text-rasterization controls, and Japanese result summaries with scrollable backend evidence. Processing runs on a worker thread, conflicting controls are disabled, and an indeterminate busy indicator keeps the main window responsive. Successful runs can open the output folder.
+The default source-checkout GUI is now a simple view centered on `PDFをここにドロップ`, with a file picker fallback. Dropping a PDF onto the repository launcher in Explorer is also accepted as a shell argument. Picker, in-window D&D, and shell input converge on the same request builder and integrated `fit_pdf` execution path; compression logic is not duplicated.
 
-The repository-root `start-pdf-size-fit.cmd` uses the supported local `.venv\Scripts\pythonw.exe` and reports readable setup instructions when the runtime or installed project is missing. A `pdf-size-fit-gui` entry point is also provided. Tkinter is imported only when the GUI starts, so headless Linux CI can test naming, conversion, request mapping, result classification, and launcher configuration without Tk or a display.
+Simple mode fixes the boundary at exactly `10_000_000` bytes. Files at or below it return the Japanese no-conversion message without calling the fitting backend or creating output. Oversized inputs use a same-directory exclusive destination: `name-fit.pdf`, `name-fit-2.pdf`, and so on. The input and existing files are never overwritten or deleted.
 
-The GUI preserves the backend defaults: `10_000_000` bytes, `min_quality=70`, `min_scale=1.0` (downsampling off), and small searchable-text rasterization off. It never offers replacing/deleting the original and rejects pre-existing destinations. This is a source-checkout usability MVP only; it is not a packaged/distributable EXE, installer, or final release.
+Quality, image scale, route, and backend evidence are absent from the default view. The prior development controls remain behind `詳細設定`. Simple requests retain `min_quality=70`, `min_scale=1.0` (downsampling off), and `allow_small_searchable_text_rasterization=False`; no destructive opt-in is silently enabled. Processing remains on a worker thread and successful runs retain `フォルダーを開く`.
+
+Tkinter and Tk D&D integration are imported only at GUI startup. Headless tests cover the fixed boundary, no-op behavior, collision naming, immutable destinations, backend argument mapping, D&D parsing, shell/drop path convergence, and simple presentation without starting Tk or requiring a display. GitHub Actions runs the full suite on both Ubuntu and Windows for Python 3.11 and 3.12.
+
+The repository-root `start-pdf-size-fit.cmd` still uses the local `.venv\Scripts\pythonw.exe`; portable packaging remains Stage 2 work. This is not yet a packaged/distributable EXE, installer, or final release.
 
 ## Validated compression routes so far
 
