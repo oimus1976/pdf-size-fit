@@ -23,6 +23,20 @@ Three compression routes are under investigation:
 
 The preferred behavior is to make no change when a PDF is already below the configured threshold.
 
+## Integrated automatic fitting
+
+The integrated backend diagnoses the input and automatically dispatches only to the two currently implemented execution routes:
+
+```powershell
+pdf-size-fit .\oversize.pdf .\oversize-fit.pdf --target-bytes 10000000
+```
+
+It returns success without writing output for `skip`, delegates `image-heavy` and `vector-monochrome` to their existing fail-closed fitters, and refuses `vector-color` and `unclassified` without writing output. Callers do not choose the PDF-internal route. Machine-readable output is available with `--json`.
+
+The integrated command preserves the existing route controls and defaults. Image downsampling remains off unless `--min-scale` is set below `1.0`; `--min-quality` keeps the image route's existing default of `70`. Small searchable-text rasterization on the monochrome route remains off unless `--allow-small-searchable-text-rasterization` is explicitly supplied, and monochrome rendering remains fixed at 300 dpi.
+
+The route-specific diagnosis and fitting commands below remain available.
+
 ## Diagnosis PoC
 
 The automatic routing classifier reports the proposed route and evidence before compression is attempted.

@@ -41,6 +41,9 @@ The project is currently experimental and does not yet use formal releases.
 - Sample-specific real-world forced-downsampling and fixed-condition render-validation evidence; detailed measurements are in `docs/TEST_MATRIX.md`.
 - Fail-closed monochrome-vector execution module and CLI using fixed 300 dpi PDFium rendering, 1-bit conversion, and CCITT Group 4 encoding with no DPI search.
 - Synthetic monochrome-route regression coverage for successful fitting, immutable inputs, exclusive destinations, route/target outcomes, structural preservation, and destructive-rasterization safety refusals.
+- Integrated `fit_pdf` backend API and `pdf-size-fit` CLI that automatically dispatch `image-heavy` and `vector-monochrome` diagnoses to the existing fitters.
+- Normalized integrated results with top-level status, diagnosed route, paths, sizes, target, delegated route status, reasons, and nested route-specific details.
+- Focused orchestration coverage for dispatch, option forwarding, skip and unsupported no-output behavior, delegated result normalization, CLI JSON/exit codes, and existing-destination protection.
 - Dual-parser bounded opt-in for rasterizing a small searchable text layer, with per-page equality and independent pypdf/PDFium boundary coverage.
 - Fixed-300-dpi persistent bilateral midtone coverage for hard black/white content, narrow antialias transitions, gray stripes/patches at the provisional boundary, material gray regions, and fail-closed inspection errors.
 - Raw page-tree regression coverage for node allowlists, identity/tree invariants, descendant counts, flattened-order agreement, and valid inherited MediaBox/Rotate behavior.
@@ -63,6 +66,7 @@ The project is currently experimental and does not yet use formal releases.
 - Fully opaque soft masks are now accepted as removable only when their image dictionaries contain a strict allowlist of known-safe keys; optional-content, metadata, and unknown semantics fail closed.
 - Original-retention requirements now explicitly prohibit automatic input deletion or replacement and avoid unsolicited backup copies; compression is an irreversible derivative whose retention handling belongs to the adopting organization's document-management rules.
 - Monochrome execution now requires the existing `vector-monochrome` diagnosis for the same target and rejects unsupported document semantics before diagnosis rendering.
+- Integrated fitting treats `skip` as a no-output success and fails closed for `vector-color` and `unclassified`; existing route-specific safety defaults and CLIs remain unchanged.
 - Monochrome bilevel preflight now rejects a 3x3-persistent unsupported-midtone region whose centers lack bilateral near-black/near-white support in a 5x5 neighborhood at 300 dpi, instead of using the provisional 72-dpi raw-midtone percentage rule.
 - Searchable text remains refused by default; explicit opt-in requires both pypdf and PDFium independently to stay within 8 non-whitespace characters and one non-empty line per page and 256 non-whitespace characters per document and to agree exactly on normalized page metrics, with accepted results recording loss of selectable/searchable and search/copy semantics.
 - Monochrome structural preflight now walks the raw `/Pages` tree before flattened pages are trusted, rejecting unknown node/leaf semantics, malformed types/counts/parent links, identity uncertainty, repeated nodes/cycles/duplicate leaves, and raw-to-flattened order disagreement.
