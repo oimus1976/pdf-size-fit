@@ -26,7 +26,7 @@ Quality, image scale, route, and backend evidence are absent from the default vi
 
 Tkinter and Tk D&D integration are imported only at GUI startup. Headless tests cover the fixed boundary, no-op behavior, collision naming, immutable destinations, backend argument mapping, D&D parsing, shell/drop path convergence, and simple presentation without starting Tk or requiring a display. GitHub Actions runs the full suite on both Ubuntu and Windows for Python 3.11 and 3.12.
 
-The repository-root `start-pdf-size-fit.cmd` still uses the local `.venv\Scripts\pythonw.exe`; portable packaging remains Stage 2 work. This is not yet a packaged/distributable EXE, installer, or final release.
+The repository-root `start-pdf-size-fit.cmd` still uses the local `.venv\Scripts\pythonw.exe` for source-checkout development. Issue #13 Stage 2 produced a separate Windows x64 PyInstaller 6.22.2 onedir ZIP from source commit `1242df81e2a3bc6b0b00ddd9ef19595cb3fb548a`. NucBox9 smoke passed for GUI startup, shell-path no-op, collision-safe oversized fitting, immutable inputs/destinations, pypdf/PDFium reopen/render, and runtime network independence. Exact evidence and licensing status are in `docs/PORTABLE_BUILD.md` and `docs/LICENSE_REVIEW.md`. The ZIP is internal-evaluation-only and is not an installer, signed binary, public release, or completion of the separate work-PC gate.
 
 ## Validated compression routes so far
 

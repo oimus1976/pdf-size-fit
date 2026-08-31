@@ -52,7 +52,12 @@ Simple mode fixes the target at exactly `10_000_000` bytes. A PDF at or below th
 
 Quality, scale, route, and backend evidence are hidden from the default view. `詳細設定` retains the previous development controls. Simple mode keeps image downsampling off (`min_scale=1.0`) and searchable-text rasterization off; it never silently enables either destructive opt-in. The launcher uses `.venv\Scripts\pythonw.exe` and shows setup instructions if the expected runtime or installed project is missing. The same GUI is available through the `pdf-size-fit-gui` Python entry point.
 
-This GUI is a source-checkout usability MVP, not a packaged or distributable release. It is not an EXE or installer and does not auto-download dependencies at startup.
+Issue #13 Stage 2 also produced a reviewed Windows x64 PyInstaller onedir ZIP
+from source commit `1242df81e2a3bc6b0b00ddd9ef19595cb3fb548a`. It includes
+Python/Tk/PDFium and requires no runtime download or installed Python. Exact
+build inputs, artifact hash, runtime inventory, licensing status, and NucBox9
+smoke evidence are recorded in `docs/PORTABLE_BUILD.md`. The artifact remains
+an internal-evaluation build, not a public release or installer.
 
 The route-specific diagnosis and fitting commands below remain available.
 

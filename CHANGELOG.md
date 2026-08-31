@@ -57,6 +57,8 @@ The project is currently experimental and does not yet use formal releases.
 - Exact no-conversion behavior and Japanese message for PDFs at or below 10,000,000 bytes, plus same-directory `name-fit.pdf`, `name-fit-2.pdf`, ... collision-safe naming for oversized inputs.
 - A `詳細設定` disclosure that retains the previous quality, scale, rasterization opt-in, output, and backend-evidence controls while keeping them out of the default simple view.
 - Cross-platform GitHub Actions coverage on Ubuntu and Windows for Python 3.11 and 3.12; GUI workflow tests remain headless and display-independent.
+- Exact-pinned Windows x64 PyInstaller 6.22.2 onedir packaging, an isolated build script, artifact-level native/runtime inventory, collected license texts, and `THIRD_PARTY_NOTICES.txt`.
+- NucBox9 Stage 2 evidence for ZIP-only startup without Python on PATH, Explorer-equivalent shell input, `<=10 MB` no-op, collision-safe oversized synthetic compression, immutability, pypdf/PDFium reopen/render, and zero observed runtime TCP connections.
 
 ### Changed
 
