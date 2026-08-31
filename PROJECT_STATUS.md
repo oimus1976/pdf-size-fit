@@ -16,6 +16,14 @@ The integration is orchestration only. `skip` succeeds without creating output; 
 
 Existing safety policy is unchanged: image minimum-quality behavior is preserved, image downsampling defaults off at `min_scale=1.0`, monochrome rendering remains fixed at 300 dpi, and small searchable-text rasterization remains explicit opt-in and off by default. The integration does not pre-create destinations, overwrite inputs or existing destinations, delete originals, add a compression route, or introduce a product-wide target safety margin.
 
+## Windows GUI usability MVP
+
+A minimal standard-library Tkinter GUI now wraps the integrated `fit_pdf` backend for interactive Windows use from a source checkout. It provides PDF input/output pickers, collision-free same-directory output suggestions, an exact decimal-MB target, the existing `min_quality`, `min_scale`, and searchable-text-rasterization controls, and Japanese result summaries with scrollable backend evidence. Processing runs on a worker thread, conflicting controls are disabled, and an indeterminate busy indicator keeps the main window responsive. Successful runs can open the output folder.
+
+The repository-root `start-pdf-size-fit.cmd` uses the supported local `.venv\Scripts\pythonw.exe` and reports readable setup instructions when the runtime or installed project is missing. A `pdf-size-fit-gui` entry point is also provided. Tkinter is imported only when the GUI starts, so headless Linux CI can test naming, conversion, request mapping, result classification, and launcher configuration without Tk or a display.
+
+The GUI preserves the backend defaults: `10_000_000` bytes, `min_quality=70`, `min_scale=1.0` (downsampling off), and small searchable-text rasterization off. It never offers replacing/deleting the original and rejects pre-existing destinations. This is a source-checkout usability MVP only; it is not a packaged/distributable EXE, installer, or final release.
+
 ## Validated compression routes so far
 
 ### 1. Image-heavy PDF
