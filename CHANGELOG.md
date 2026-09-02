@@ -59,6 +59,8 @@ The project is currently experimental and does not yet use formal releases.
 - Cross-platform GitHub Actions coverage on Ubuntu and Windows for Python 3.11 and 3.12; GUI workflow tests remain headless and display-independent.
 - Exact-pinned Windows x64 PyInstaller 6.22.2 onedir packaging, an isolated build script, artifact-level native/runtime inventory, collected license texts, and `THIRD_PARTY_NOTICES.txt`.
 - NucBox9 Stage 2 evidence for ZIP-only startup without Python on PATH, Explorer-equivalent shell input, `<=10 MB` no-op, collision-safe oversized synthetic compression, immutability, pypdf/PDFium reopen/render, and zero observed runtime TCP connections.
+- Explicit Japanese simple-mode offer to retry only an eligible `image-heavy` `target-not-met` result through the existing bounded downsampling search, with cancellation and no-output failure behavior.
+- Headless fallback-flow coverage for offer eligibility, exact option forwarding, cancellation, success evidence, and failure presentation.
 
 ### Changed
 
@@ -83,6 +85,7 @@ The project is currently experimental and does not yet use formal releases.
 - Monochrome structural preflight now walks the raw `/Pages` tree before flattened pages are trusted, rejecting unknown node/leaf semantics, malformed types/counts/parent links, identity uncertainty, repeated nodes/cycles/duplicate leaves, and raw-to-flattened order disagreement.
 - Monochrome destructive safety now rejects any fixed-300-dpi RGB pixel with channel spread at least 16 before the separate grayscale/bilevel inspection; no area-percentage threshold is used, and candidate rendering remains `grayscale=True` then `.convert("1")`.
 - Simple mode now refuses to call the fitting backend for inputs at or below 10,000,000 bytes and never silently enables image downsampling or searchable-text rasterization.
+- The simple workflow still begins at `min_scale=1.0`; only explicit confirmation after its eligible image-heavy failure relaxes the floor to `0.50`, while preserving target 10,000,000 bytes, minimum JPEG quality 70, searchable-text rasterization off, collision-safe output, and existing fail-closed safeguards.
 
 ### Notes
 
