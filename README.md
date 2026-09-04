@@ -52,6 +52,8 @@ Simple mode fixes the target at exactly `10_000_000` bytes. A PDF at or below th
 
 Quality, scale, route, and backend evidence are hidden from the default view. `詳細設定` retains the previous development controls. Simple mode keeps image downsampling off (`min_scale=1.0`) and searchable-text rasterization off; it never silently enables either destructive opt-in. The launcher uses `.venv\Scripts\pythonw.exe` and shows setup instructions if the expected runtime or installed project is missing. The same GUI is available through the `pdf-size-fit-gui` Python entry point.
 
+If and only if that unchanged simple attempt returns `image-heavy` / `target-not-met`, the GUI explains in Japanese that the safe settings could not reach 10 MB and offers `画像を縮小して再試行` or `キャンセル`. Confirmation reuses the existing image fitter with `min_quality=70` and a reviewed `min_scale=0.50` floor; it does not enable searchable-text rasterization or bypass structural and `/SMask` safeguards. Image quality may decrease. Cancellation or fallback exhaustion leaves no output, and success identifies that scaling was used and records the selected scale and JPEG quality. The original PDF and pre-existing collision names remain unchanged.
+
 Issue #13 Stage 2 also produced a reviewed Windows x64 PyInstaller onedir ZIP
 from source commit `1242df81e2a3bc6b0b00ddd9ef19595cb3fb548a`. It includes
 Python/Tk/PDFium and requires no runtime download or installed Python. Exact

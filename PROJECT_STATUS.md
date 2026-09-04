@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 ## Current phase
 
@@ -23,6 +23,8 @@ The default source-checkout GUI is now a simple view centered on `PDFをここ�
 Simple mode fixes the boundary at exactly `10_000_000` bytes. Files at or below it return the Japanese no-conversion message without calling the fitting backend or creating output. Oversized inputs use a same-directory exclusive destination: `name-fit.pdf`, `name-fit-2.pdf`, and so on. The input and existing files are never overwritten or deleted.
 
 Quality, image scale, route, and backend evidence are absent from the default view. The prior development controls remain behind `詳細設定`. Simple requests retain `min_quality=70`, `min_scale=1.0` (downsampling off), and `allow_small_searchable_text_rasterization=False`; no destructive opt-in is silently enabled. Processing remains on a worker thread and successful runs retain `フォルダーを開く`.
+
+Only an `image-heavy` `target-not-met` result from that exact initial simple request produces an explicit Japanese downsampling offer. Confirmation changes only the image scale floor to the reviewed `min_scale=0.50` and reruns the existing fitter; target 10,000,000 bytes, minimum JPEG quality 70, searchable-text rasterization off, exclusive output creation, and all structural and `/SMask` fail-closed checks remain authoritative. Ordinary success, the `<=10 MB` no-op, other routes/refusals, cancellation, and advanced-mode execution do not enter this retry path. Fallback success reports the selected scale and quality and warns about possible quality loss; fallback failure leaves no output.
 
 Tkinter and Tk D&D integration are imported only at GUI startup. Headless tests cover the fixed boundary, no-op behavior, collision naming, immutable destinations, backend argument mapping, D&D parsing, shell/drop path convergence, and simple presentation without starting Tk or requiring a display. GitHub Actions runs the full suite on both Ubuntu and Windows for Python 3.11 and 3.12.
 
