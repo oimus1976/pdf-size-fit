@@ -35,20 +35,29 @@ It returns success without writing output for `skip`, delegates `image-heavy` an
 
 The integrated command preserves the existing route controls and defaults. Image downsampling remains off unless `--min-scale` is set below `1.0`; `--min-quality` keeps the image route's existing default of `70`. Small searchable-text rasterization on the monochrome route remains off unless `--allow-small-searchable-text-rasterization` is explicitly supplied, and monochrome rendering remains fixed at 300 dpi.
 
-## Windows GUI quick start
+## Windows simple GUI quick start
 
-The source checkout includes a minimal Tkinter GUI for interactive use on Windows. Complete the one-time setup from PowerShell in the repository root:
+PDFをアプリにドロップすると、10MBを超える場合だけ同じフォルダに10MB以下のコピーを作成します。元ファイルは変更しません。
+
+The source checkout includes a drag-and-drop Tkinter GUI for interactive use on Windows. Complete the one-time setup from PowerShell in the repository root:
 
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-Then double-click `start-pdf-size-fit.cmd`. The launcher uses `.venv\Scripts\pythonw.exe` and shows setup instructions instead of silently closing if the expected runtime or installed project is missing. The same GUI is available through the `pdf-size-fit-gui` Python entry point.
+Then double-click `start-pdf-size-fit.cmd`. The default view is centered on `PDFをここにドロップ`; a file picker is also available. A PDF can also be dropped directly onto `start-pdf-size-fit.cmd` in Explorer. Picker, in-window D&D, and shell-argument input all use the same simple request path and the existing integrated `fit_pdf` backend.
 
-Choose an input PDF and a separate output path. The GUI suggests a non-existing `name-fit.pdf` (or numbered variant), uses decimal MB (`1 MB = 1,000,000 bytes`), and runs the existing integrated `fit_pdf` backend without duplicating route selection. Its defaults preserve the backend safety policy: 10 MB target, minimum JPEG quality 70, image scale 100% (downsampling off), and searchable-text rasterization unchecked. It never replaces or deletes the original or overwrites an existing destination.
+Simple mode fixes the target at exactly `10_000_000` bytes. A PDF at or below that boundary is not sent to the fitting backend, creates no output, and reports `このPDFはすでに10MB以下です。変換は不要です。`. An oversized supported PDF is written beside the input as `name-fit.pdf`, then `name-fit-2.pdf`, `name-fit-3.pdf`, and so on when names are already present. The original and every existing destination remain untouched.
 
-This GUI is a source-checkout usability MVP, not a packaged or distributable release. It is not an EXE or installer and does not auto-download dependencies at startup.
+Quality, scale, route, and backend evidence are hidden from the default view. `詳細設定` retains the previous development controls. Simple mode keeps image downsampling off (`min_scale=1.0`) and searchable-text rasterization off; it never silently enables either destructive opt-in. The launcher uses `.venv\Scripts\pythonw.exe` and shows setup instructions if the expected runtime or installed project is missing. The same GUI is available through the `pdf-size-fit-gui` Python entry point.
+
+Issue #13 Stage 2 also produced a reviewed Windows x64 PyInstaller onedir ZIP
+from source commit `1242df81e2a3bc6b0b00ddd9ef19595cb3fb548a`. It includes
+Python/Tk/PDFium and requires no runtime download or installed Python. Exact
+build inputs, artifact hash, runtime inventory, licensing status, and NucBox9
+smoke evidence are recorded in `docs/PORTABLE_BUILD.md`. The artifact remains
+an internal-evaluation build, not a public release or installer.
 
 The route-specific diagnosis and fitting commands below remain available.
 

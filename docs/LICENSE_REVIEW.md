@@ -4,6 +4,49 @@ Status: **Preliminary / not legal advice**
 
 The project license and final dependency set are not yet selected. This document records the current engineering constraints so license decisions are not made implicitly through implementation choices.
 
+## Issue #13 Stage 2 packaged-artifact review (2026-09-01)
+
+The reviewed artifact is the Windows x64 PyInstaller onedir ZIP described in
+`docs/PORTABLE_BUILD.md`, built from application source commit
+`1242df81e2a3bc6b0b00ddd9ef19595cb3fb548a`.
+
+Application-license decision for this gate: no open-source application license
+is selected. The artifact is restricted to internal evaluation, with all
+rights in the application code reserved and public redistribution prohibited
+pending an owner/legal decision. This deliberately narrow boundary does not
+change or override any third-party license.
+
+Packaged-release checklist status for this exact artifact:
+
+1. **Complete:** runtime and packager dependencies are exact-pinned in
+   `packaging/windows/requirements-portable-build.txt`.
+2. **Complete:** applicable wheel, CPython, Tcl/Tk, TkDND, OpenSSL, zlib, and
+   packager license texts are captured under `licenses/` and copied into the
+   ZIP.
+3. **Complete for engineering inventory:** the artifact includes a hashed
+   `RUNTIME_INVENTORY.txt` covering every bundled EXE, DLL, and PYD. The
+   summary in `docs/PORTABLE_BUILD.md` identifies PDFium, CPython, Tcl/Tk,
+   TkDND, Pillow native codecs, OpenSSL, zlib, libffi, Visual C++ runtime,
+   UCRT/API sets, and the PyInstaller bootloader.
+4. **Complete for this gate:** the application is internal-evaluation-only;
+   no public application license is inferred.
+5. **Complete:** artifact-specific `THIRD_PARTY_NOTICES.txt` is present beside
+   the EXE, with full texts in the adjacent `licenses/` directory.
+6. **Complete for engineering review:** the final onedir tree was enumerated
+   after packaging. Components added by Python/PyInstaller are recorded rather
+   than treated as implicit. Legal approval for broader distribution remains
+   outside this engineering review.
+7. **Complete:** review date, exact versions, source commit, artifact hash,
+   license-file provenance, and NucBox9 evidence are recorded in the notice,
+   lock file, inventory, and portable-build document.
+
+The pypdfium2 wheel's `dep5-wheel` and
+`LicenseRef-PdfiumThirdParty.txt` are preserved for the exact PDFium binary;
+Pillow's exact wheel license file is preserved for its compiled codec closure.
+PyInstaller is used under its bootloader exception; its `COPYING.txt` is also
+included. This remains an engineering record, not a legal compatibility
+opinion or approval for public release.
+
 ## Project constraints
 
 The intended deployment requires:

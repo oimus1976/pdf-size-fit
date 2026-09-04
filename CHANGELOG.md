@@ -52,6 +52,13 @@ The project is currently experimental and does not yet use formal releases.
 - Collision-free output-name suggestions, exact decimal-MB conversion, input/option validation, and a successful-output folder shortcut without any replace/delete-original action.
 - Repository-root `start-pdf-size-fit.cmd` launcher using the local `.venv` Python GUI runtime with readable missing-setup failures, plus the `pdf-size-fit-gui` entry point.
 - Headless GUI-helper regression coverage for output safety, target conversion, exact backend argument mapping, status presentation, and launcher/entry-point configuration.
+- Default simple GUI centered on `PDFをここにドロップ`, with an in-window D&D target, file picker fallback, and Explorer shell-argument input.
+- One fixed simple workflow shared by picker, GUI D&D, and shell input, using an exact `10_000_000`-byte boundary and the existing integrated `fit_pdf` backend for oversized PDFs only.
+- Exact no-conversion behavior and Japanese message for PDFs at or below 10,000,000 bytes, plus same-directory `name-fit.pdf`, `name-fit-2.pdf`, ... collision-safe naming for oversized inputs.
+- A `詳細設定` disclosure that retains the previous quality, scale, rasterization opt-in, output, and backend-evidence controls while keeping them out of the default simple view.
+- Cross-platform GitHub Actions coverage on Ubuntu and Windows for Python 3.11 and 3.12; GUI workflow tests remain headless and display-independent.
+- Exact-pinned Windows x64 PyInstaller 6.22.2 onedir packaging, an isolated build script, artifact-level native/runtime inventory, collected license texts, and `THIRD_PARTY_NOTICES.txt`.
+- NucBox9 Stage 2 evidence for ZIP-only startup without Python on PATH, Explorer-equivalent shell input, `<=10 MB` no-op, collision-safe oversized synthetic compression, immutability, pypdf/PDFium reopen/render, and zero observed runtime TCP connections.
 
 ### Changed
 
@@ -75,11 +82,12 @@ The project is currently experimental and does not yet use formal releases.
 - Searchable text remains refused by default; explicit opt-in requires both pypdf and PDFium independently to stay within 8 non-whitespace characters and one non-empty line per page and 256 non-whitespace characters per document and to agree exactly on normalized page metrics, with accepted results recording loss of selectable/searchable and search/copy semantics.
 - Monochrome structural preflight now walks the raw `/Pages` tree before flattened pages are trusted, rejecting unknown node/leaf semantics, malformed types/counts/parent links, identity uncertainty, repeated nodes/cycles/duplicate leaves, and raw-to-flattened order disagreement.
 - Monochrome destructive safety now rejects any fixed-300-dpi RGB pixel with channel spread at least 16 before the separate grayscale/bilevel inspection; no area-percentage threshold is used, and candidate rendering remains `grayscale=True` then `.convert("1")`.
+- Simple mode now refuses to call the fitting backend for inputs at or below 10,000,000 bytes and never silently enables image downsampling or searchable-text rasterization.
 
 ### Notes
 
 - No application license has been selected yet.
-- No production compression engine, GUI, installer, or release artifact exists yet.
+- No production compression engine, installer, or release artifact exists yet; the GUI remains a source-checkout Stage 1 implementation.
 - Real municipal source documents used for local validation are intentionally excluded from the repository.
 - Image replacement remains deliberately conservative: unsupported masks, color spaces, bit depths, decoding structures, unknown image dictionary semantics, signed/certified PDFs, or PDF/A-identified PDFs return a fail-closed result rather than being rewritten silently.
 - Downsampling still refuses general or transparency-bearing `/SMask` images because the base image and mask are not resized in lockstep. Only a redundant soft mask strictly proven fully opaque may be removed for downsampling.
