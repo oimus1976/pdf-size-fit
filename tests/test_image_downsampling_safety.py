@@ -28,9 +28,7 @@ def test_downsampling_is_disabled_by_default(tmp_path: Path) -> None:
     assert not output.exists()
 
 
-def test_downsampling_pixel_dimensions_do_not_fall_below_scale_floor(
-    tmp_path: Path,
-) -> None:
+def test_downsampling_pixel_dimensions_do_not_fall_below_scale_floor(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "scaled.pdf"
     scale = 0.75
@@ -50,9 +48,7 @@ def test_downsampling_pixel_dimensions_do_not_fall_below_scale_floor(
     assert output_image.height / source_image.height >= scale
 
 
-def test_downsampling_selects_largest_fitting_integer_percent_scale(
-    tmp_path: Path,
-) -> None:
+def test_downsampling_selects_largest_fitting_integer_percent_scale(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "output.pdf"
     generate_image_heavy(source, pages=1, image_size=300)
@@ -69,9 +65,7 @@ def test_downsampling_selects_largest_fitting_integer_percent_scale(
 
     target = min(candidate_sizes.values())
     assert full_size > target
-    expected_percent = max(
-        percent for percent, size in candidate_sizes.items() if size <= target
-    )
+    expected_percent = max(percent for percent, size in candidate_sizes.items() if size <= target)
 
     result = fit_image_heavy_pdf(
         source,

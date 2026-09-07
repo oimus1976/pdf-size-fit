@@ -1,7 +1,0 @@
-feat: Implement fail-closed vector-color execution route
-
-- Fixed 200 dpi / JPEG quality 90 color rasterization
-- `vector-color` diagnosis dispatch in integrated `fit_pdf`
-- Retained strict safeties from monochrome root
-- Added `pdf-size-fit-color` cli strictly for testing/debugging
-- Tests cover full requirements, synthetic fixtures only

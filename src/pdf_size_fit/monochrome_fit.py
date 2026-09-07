@@ -25,6 +25,7 @@ from pypdf.generic import (
 
 from .diagnose import Route, diagnose_pdf
 
+
 FIXED_DPI = 300
 NEAR_BLACK_MAX = 32
 MIDTONE_MIN = 33
@@ -202,9 +203,7 @@ def _page_tree_identity(
 def _raw_page_tree_refusal(reader: PdfReader, root: DictionaryObject) -> str | None:
     try:
         if "/Pages" not in root:
-            raise _PageTreeRefusal(
-                "PDF catalog does not contain a raw /Pages reference"
-            )
+            raise _PageTreeRefusal("PDF catalog does not contain a raw /Pages reference")
         root_reference = root.raw_get("/Pages")
         root_identity = _page_tree_identity(
             root_reference,
@@ -290,7 +289,9 @@ def _raw_page_tree_refusal(reader: PdfReader, root: DictionaryObject) -> str | N
                     "raw /Pages /Count is not a non-negative integer"
                 )
 
-            descendant_count = sum(visit(kid, identity, is_root=False) for kid in kids)
+            descendant_count = sum(
+                visit(kid, identity, is_root=False) for kid in kids
+            )
             if count != descendant_count:
                 raise _PageTreeRefusal(
                     f"raw /Pages /Count {count} does not match discovered leaf "
@@ -325,14 +326,13 @@ def _raw_page_tree_refusal(reader: PdfReader, root: DictionaryObject) -> str | N
         return str(exc)
     except Exception as exc:
         return (
-            "raw page tree could not be inspected reliably " f"({type(exc).__name__})"
+            "raw page tree could not be inspected reliably "
+            f"({type(exc).__name__})"
         )
     return None
 
 
-def _read_page_specs(
-    reader: PdfReader,
-) -> tuple[tuple[_PageSpec, ...] | None, str | None]:
+def _read_page_specs(reader: PdfReader) -> tuple[tuple[_PageSpec, ...] | None, str | None]:
     specs: list[_PageSpec] = []
     for index, page in enumerate(reader.pages, start=1):
         try:
@@ -349,15 +349,8 @@ def _read_page_specs(
             raw_rotation = float(page.get("/Rotate", 0) or 0)
         except Exception:
             return None, f"page {index} rotation cannot be read reliably"
-        if (
-            not isfinite(raw_rotation)
-            or not raw_rotation.is_integer()
-            or int(raw_rotation) % 90
-        ):
-            return (
-                None,
-                f"page {index} rotation is not an integer multiple of 90 degrees",
-            )
+        if not isfinite(raw_rotation) or not raw_rotation.is_integer() or int(raw_rotation) % 90:
+            return None, f"page {index} rotation is not an integer multiple of 90 degrees"
         rotation = int(raw_rotation)
 
         try:
@@ -368,10 +361,7 @@ def _read_page_specs(
             return None, f"page {index} has a CropBox different from its MediaBox"
 
         if any(key in page for key in ("/BleedBox", "/TrimBox", "/ArtBox")):
-            return (
-                None,
-                f"page {index} uses additional page boxes that are not preserved",
-            )
+            return None, f"page {index} uses additional page boxes that are not preserved"
         try:
             user_unit = float(page.get("/UserUnit", 1) or 1)
         except Exception:
@@ -380,10 +370,7 @@ def _read_page_specs(
             return None, f"page {index} uses unsupported UserUnit {user_unit!r}"
         annotations = _resolve(page.get("/Annots"))
         if isinstance(annotations, (ArrayObject, list)) and annotations:
-            return (
-                None,
-                f"page {index} contains annotations that whole-page rasterization would discard",
-            )
+            return None, f"page {index} contains annotations that whole-page rasterization would discard"
         if annotations is not None and not isinstance(annotations, (ArrayObject, list)):
             return None, f"page {index} annotations cannot be inspected safely"
         if "/AF" in page:
@@ -404,10 +391,7 @@ def _read_page_specs(
 
 def _preflight(reader: PdfReader) -> tuple[tuple[_PageSpec, ...] | None, str | None]:
     if reader.is_encrypted:
-        return (
-            None,
-            "encrypted PDFs are not supported by the destructive monochrome route",
-        )
+        return None, "encrypted PDFs are not supported by the destructive monochrome route"
 
     root = _resolve(reader.trailer.get("/Root"))
     if not isinstance(root, DictionaryObject):
@@ -426,15 +410,9 @@ def _preflight(reader: PdfReader) -> tuple[tuple[_PageSpec, ...] | None, str | N
         isinstance(fields, (ArrayObject, list))
         and any(_contains_signature_field(field) for field in fields)
     ):
-        return (
-            None,
-            "PDF contains a signature field or certification-permissions structure",
-        )
+        return None, "PDF contains a signature field or certification-permissions structure"
     if isinstance(fields, (ArrayObject, list)) and fields:
-        return (
-            None,
-            "PDF contains AcroForm fields that whole-page rasterization would discard",
-        )
+        return None, "PDF contains AcroForm fields that whole-page rasterization would discard"
     if "/AcroForm" in root:
         return None, "PDF contains an AcroForm structure that is not preserved"
 
@@ -453,14 +431,8 @@ def _preflight(reader: PdfReader) -> tuple[tuple[_PageSpec, ...] | None, str | N
     if "/Outlines" in root:
         return None, "PDF contains outlines/bookmarks that are not preserved"
     navigation_keys = (
-        "/OpenAction",
-        "/AA",
-        "/Dests",
-        "/PageLabels",
-        "/Threads",
-        "/StructTreeRoot",
-        "/OCProperties",
-        "/Collection",
+        "/OpenAction", "/AA", "/Dests", "/PageLabels", "/Threads",
+        "/StructTreeRoot", "/OCProperties", "/Collection",
     )
     present_navigation = [key for key in navigation_keys if key in root]
     if present_navigation:
@@ -469,10 +441,7 @@ def _preflight(reader: PdfReader) -> tuple[tuple[_PageSpec, ...] | None, str | N
             + ", ".join(present_navigation)
         )
     if isinstance(names, DictionaryObject) and names:
-        return (
-            None,
-            "PDF contains named document-level semantics that are not preserved",
-        )
+        return None, "PDF contains named document-level semantics that are not preserved"
 
     unsupported_catalog_keys = sorted(
         str(key) for key in root.keys() if key not in ALLOWED_CATALOG_KEYS
@@ -574,8 +543,12 @@ def _has_persistent_unsupported_midtone(grayscale: Image.Image) -> bool:
     unsupported_midtone = None
     persistent_unsupported = None
     try:
-        minimum = grayscale.filter(ImageFilter.MinFilter(MIDTONE_SUPPORT_FILTER_SIZE))
-        maximum = grayscale.filter(ImageFilter.MaxFilter(MIDTONE_SUPPORT_FILTER_SIZE))
+        minimum = grayscale.filter(
+            ImageFilter.MinFilter(MIDTONE_SUPPORT_FILTER_SIZE)
+        )
+        maximum = grayscale.filter(
+            ImageFilter.MaxFilter(MIDTONE_SUPPORT_FILTER_SIZE)
+        )
         midtone = grayscale.point(
             lambda value: 255 if MIDTONE_MIN <= value <= MIDTONE_MAX else 0
         )
@@ -840,9 +813,7 @@ def _single_ccitt_image(image: Image.Image, writer: PdfWriter) -> IndirectObject
         raise RuntimeError("Pillow did not produce exactly one image XObject")
     ref = images[0].indirect_reference
     if ref is None:
-        raise RuntimeError(
-            "Pillow produced an inline image instead of an image XObject"
-        )
+        raise RuntimeError("Pillow produced an inline image instead of an image XObject")
     image_object = ref.get_object()
 
     filters = _resolve(image_object.get("/Filter"))
@@ -852,10 +823,7 @@ def _single_ccitt_image(image: Image.Image, writer: PdfWriter) -> IndirectObject
         filter_names = (str(filters),)
     if filter_names != ("/CCITTFaxDecode",):
         raise RuntimeError("CCITT Group 4 encoding is unavailable in this Pillow build")
-    if (
-        image_object.get("/BitsPerComponent") != 1
-        or image_object.get("/ColorSpace") != "/DeviceGray"
-    ):
+    if image_object.get("/BitsPerComponent") != 1 or image_object.get("/ColorSpace") != "/DeviceGray":
         raise RuntimeError("Pillow did not produce a 1-bit grayscale image XObject")
 
     decode_params = _resolve(image_object.get("/DecodeParms"))
@@ -869,9 +837,7 @@ def _single_ccitt_image(image: Image.Image, writer: PdfWriter) -> IndirectObject
         or decode_params.get("/Columns") != image.width
         or decode_params.get("/Rows") != image.height
     ):
-        raise RuntimeError(
-            "CCITT image does not use the required Group 4 decode parameters"
-        )
+        raise RuntimeError("CCITT image does not use the required Group 4 decode parameters")
 
     cloned = image_object.clone(writer, force_duplicate=True)
     cloned_ref = getattr(cloned, "indirect_reference", None)
@@ -903,9 +869,7 @@ def _build_candidate(
             try:
                 normalized_rotation = spec.rotation % 360
                 if source_page.get_rotation() != normalized_rotation:
-                    raise RuntimeError(
-                        f"page {index + 1} rotation differs between PDF readers"
-                    )
+                    raise RuntimeError(f"page {index + 1} rotation differs between PDF readers")
                 bitmap = source_page.render(
                     scale=scale,
                     rotation=(-normalized_rotation) % 360,
@@ -940,14 +904,8 @@ def _build_candidate(
             content = DecodedStreamObject()
             content.set_data(
                 b"q\n"
-                + _number(spec.width)
-                + b" 0 0 "
-                + _number(spec.height)
-                + b" "
-                + _number(left)
-                + b" "
-                + _number(bottom)
-                + b" cm\n"
+                + _number(spec.width) + b" 0 0 " + _number(spec.height) + b" "
+                + _number(left) + b" " + _number(bottom) + b" cm\n"
                 + b"/Im0 Do\nQ\n"
             )
             page.replace_contents(content)
@@ -958,9 +916,7 @@ def _build_candidate(
         writer.write(output)
 
 
-def _page_signature(
-    reader: PdfReader,
-) -> tuple[tuple[float, float, float, float, int], ...]:
+def _page_signature(reader: PdfReader) -> tuple[tuple[float, float, float, float, int], ...]:
     signature = []
     for page in reader.pages:
         box = tuple(float(value) for value in page.mediabox)
@@ -976,15 +932,11 @@ def _verify_candidate(input_path: Path, candidate_path: Path) -> None:
     if len(source.pages) != len(candidate.pages):
         raise RuntimeError("candidate page count differs from input")
     if _page_signature(source) != _page_signature(candidate):
-        raise RuntimeError(
-            "candidate MediaBox dimensions or rotation differ from input"
-        )
+        raise RuntimeError("candidate MediaBox dimensions or rotation differ from input")
     for index, page in enumerate(candidate.pages, start=1):
         images = page.images
         if len(images) != 1:
-            raise RuntimeError(
-                f"candidate page {index} does not contain exactly one image"
-            )
+            raise RuntimeError(f"candidate page {index} does not contain exactly one image")
         image_object = images[0].indirect_reference.get_object()
         filters = _resolve(image_object.get("/Filter"))
         if isinstance(filters, (ArrayObject, list)):
@@ -1046,9 +998,7 @@ def fit_monochrome_vector_pdf(
             input_size=input_size,
             target_bytes=target_bytes,
             page_count=0 if reader.is_encrypted else len(reader.pages),
-            reasons=(
-                "input is already at or below the target size; no output was written",
-            ),
+            reasons=("input is already at or below the target size; no output was written",),
         )
 
     reader = PdfReader(str(input_path))
@@ -1060,9 +1010,7 @@ def fit_monochrome_vector_pdf(
             input_size=input_size,
             target_bytes=target_bytes,
             page_count=0,
-            reasons=(
-                refusal or "document failed the destructive-rasterization safety gate",
-            ),
+            reasons=(refusal or "document failed the destructive-rasterization safety gate",),
         )
 
     diagnosis = diagnose_pdf(input_path, target_bytes=target_bytes)
@@ -1122,9 +1070,7 @@ def fit_monochrome_vector_pdf(
         _verify_candidate(input_path, output_path)
         output_size = output_path.stat().st_size
         if output_size > target_bytes:
-            raise RuntimeError(
-                "accepted output unexpectedly exceeds target after final copy"
-            )
+            raise RuntimeError("accepted output unexpectedly exceeds target after final copy")
     except Exception:
         if output_created:
             output_path.unlink(missing_ok=True)

@@ -13,6 +13,7 @@ from typing import Any, Callable, Sequence
 from .diagnose import Route
 from .fit import FitResult, FitStatus, fit_pdf
 
+
 SIMPLE_TARGET_BYTES = 10_000_000
 SIMPLE_MIN_QUALITY = 70
 SIMPLE_MIN_SCALE = 1.0
@@ -66,9 +67,7 @@ def decimal_mb_to_bytes(value: str) -> int:
         raise ValueError("目標サイズは 0 より大きい数値にしてください。")
     byte_value = megabytes * 1_000_000
     if byte_value != byte_value.to_integral_value():
-        raise ValueError(
-            "目標サイズは 1 バイト単位に変換できる桁数で入力してください。"
-        )
+        raise ValueError("目標サイズは 1 バイト単位に変換できる桁数で入力してください。")
     return int(byte_value)
 
 
@@ -109,12 +108,8 @@ def build_request(
     try:
         scale_percent = Decimal(min_scale_percent.strip())
     except (InvalidOperation, AttributeError):
-        raise ValueError(
-            "最低画像スケールは 0 より大きく 100 以下で入力してください。"
-        ) from None
-    if not scale_percent.is_finite() or not Decimal("0") < scale_percent <= Decimal(
-        "100"
-    ):
+        raise ValueError("最低画像スケールは 0 より大きく 100 以下で入力してください。") from None
+    if not scale_percent.is_finite() or not Decimal("0") < scale_percent <= Decimal("100"):
         raise ValueError("最低画像スケールは 0 より大きく 100 以下で入力してください。")
     min_scale = float(scale_percent / 100)
     if min_scale == 0.0:
@@ -270,9 +265,7 @@ def present_simple_result(
             route_result = result.route_result
             selected_scale = getattr(route_result, "selected_scale", None)
             selected_quality = getattr(route_result, "selected_quality", None)
-            summary_lines.append(
-                "画像を縮小して変換しました。画質が低下している場合があります。"
-            )
+            summary_lines.append("画像を縮小して変換しました。画質が低下している場合があります。")
             if selected_scale is not None:
                 summary_lines.append(f"画像スケール: {selected_scale:.0%}")
             if selected_quality is not None:
@@ -420,9 +413,7 @@ class _Application:
         self.tk = tk
         self.ttk = ttk
         self.filedialog = filedialog
-        self.events: queue.Queue[tuple[str, Any, bool, bool, GuiRequest]] = (
-            queue.Queue()
-        )
+        self.events: queue.Queue[tuple[str, Any, bool, bool, GuiRequest]] = queue.Queue()
         self.busy = False
         self.successful_output: Path | None = None
         self.advanced_visible = False
@@ -438,9 +429,7 @@ class _Application:
         self.quality_var = tk.StringVar(value=DEFAULT_MIN_QUALITY)
         self.scale_var = tk.StringVar(value=DEFAULT_MIN_SCALE_PERCENT)
         self.allow_text_var = tk.BooleanVar(value=False)
-        self.status_var = tk.StringVar(
-            value="PDFをドロップするか、ファイルを選択してください。"
-        )
+        self.status_var = tk.StringVar(value="PDFをドロップするか、ファイルを選択してください。")
 
         frame = ttk.Frame(root, padding=20)
         frame.grid(sticky="nsew")
@@ -518,23 +507,17 @@ class _Application:
         self.ttk.Label(self.advanced, text="目標サイズ (decimal MB)").grid(
             row=2, column=0, sticky="w", pady=3
         )
-        target_entry = self.ttk.Entry(
-            self.advanced, textvariable=self.target_var, width=12
-        )
+        target_entry = self.ttk.Entry(self.advanced, textvariable=self.target_var, width=12)
         target_entry.grid(row=2, column=1, sticky="w", padx=8)
         self.ttk.Label(self.advanced, text="最低 JPEG 品質").grid(
             row=3, column=0, sticky="w", pady=3
         )
-        quality_entry = self.ttk.Entry(
-            self.advanced, textvariable=self.quality_var, width=12
-        )
+        quality_entry = self.ttk.Entry(self.advanced, textvariable=self.quality_var, width=12)
         quality_entry.grid(row=3, column=1, sticky="w", padx=8)
         self.ttk.Label(self.advanced, text="最低画像スケール (%)").grid(
             row=4, column=0, sticky="w", pady=3
         )
-        scale_entry = self.ttk.Entry(
-            self.advanced, textvariable=self.scale_var, width=12
-        )
+        scale_entry = self.ttk.Entry(self.advanced, textvariable=self.scale_var, width=12)
         scale_entry.grid(row=4, column=1, sticky="w", padx=8)
         allow_check = self.ttk.Checkbutton(
             self.advanced,
@@ -550,9 +533,7 @@ class _Application:
         details_frame.grid(row=7, column=0, columnspan=3, sticky="nsew")
         details_frame.columnconfigure(0, weight=1)
         details_frame.rowconfigure(0, weight=1)
-        self.details = self.tk.Text(
-            details_frame, height=10, wrap="word", state="disabled"
-        )
+        self.details = self.tk.Text(details_frame, height=10, wrap="word", state="disabled")
         scrollbar = self.ttk.Scrollbar(
             details_frame, orient="vertical", command=self.details.yview
         )
@@ -609,9 +590,7 @@ class _Application:
         paths = parse_drop_paths(event.data, self.root.tk.splitlist)
         if len(paths) != 1:
             self._show(
-                present_validation_error(
-                    ValueError("PDFを1つだけドロップしてください。")
-                )
+                present_validation_error(ValueError("PDFを1つだけドロップしてください。"))
             )
             return
         self._accept_simple_input(paths[0])
@@ -632,12 +611,8 @@ class _Application:
     def _start_advanced(self) -> None:
         try:
             request = build_request(
-                self.input_var.get(),
-                self.output_var.get(),
-                self.target_var.get(),
-                self.quality_var.get(),
-                self.scale_var.get(),
-                self.allow_text_var.get(),
+                self.input_var.get(), self.output_var.get(), self.target_var.get(),
+                self.quality_var.get(), self.scale_var.get(), self.allow_text_var.get(),
             )
         except ValueError as error:
             self._show(present_validation_error(error))
@@ -681,9 +656,13 @@ class _Application:
     ) -> None:
         try:
             result = run_simple_request(request) if simple else run_request(request)
-            self.events.put(("result", result, simple, downsampling_fallback, request))
+            self.events.put(
+                ("result", result, simple, downsampling_fallback, request)
+            )
         except BaseException as error:
-            self.events.put(("error", error, simple, downsampling_fallback, request))
+            self.events.put(
+                ("error", error, simple, downsampling_fallback, request)
+            )
 
     def _poll(self) -> None:
         try:

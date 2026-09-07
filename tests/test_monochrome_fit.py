@@ -97,7 +97,11 @@ def _generate_vector_text_pdf(
     for lines in page_lines:
         page = writer.add_blank_page(width=595, height=842)
         page[NameObject("/Resources")] = DictionaryObject(
-            {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref})}
+            {
+                NameObject("/Font"): DictionaryObject(
+                    {NameObject("/F1"): font_ref}
+                )
+            }
         )
         text_operations = ["BT /F1 12 Tf 72 720 Td"]
         for index, line in enumerate(lines):
@@ -525,7 +529,9 @@ def test_text_extraction_failure_fails_closed_with_opt_in(
     )
 
     assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
-    assert "pypdf text inspection could not be completed reliably" in result.reasons[0]
+    assert (
+        "pypdf text inspection could not be completed reliably" in result.reasons[0]
+    )
     assert not output.exists()
 
 
@@ -1074,9 +1080,7 @@ def test_raw_page_tree_accepts_inherited_mediabox_and_preserves_it(
     result = fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
 
     assert result.status is MonochromeFitStatus.FITTED
-    output_box = tuple(
-        float(value) for value in PdfReader(str(output)).pages[0].mediabox
-    )
+    output_box = tuple(float(value) for value in PdfReader(str(output)).pages[0].mediabox)
     assert output_box == (0.0, 0.0, 420.0, 595.0)
 
 
@@ -1268,10 +1272,10 @@ def test_fit_refuses_pdfa_identification_metadata(tmp_path: Path) -> None:
     _generate_vector_pdf(base)
 
     def add_pdfa(writer: PdfWriter) -> None:
-        writer.xmp_metadata = b"""<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        writer.xmp_metadata = b'''<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 <rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
 <pdfaid:part>2</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>
-</rdf:Description></rdf:RDF>"""
+</rdf:Description></rdf:RDF>'''
 
     _rewrite(base, source, add_pdfa)
     result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
