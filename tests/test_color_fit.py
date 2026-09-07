@@ -3,9 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-import pypdfium2
 import pytest
-from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import (
     ArrayObject,
@@ -17,11 +15,11 @@ from pypdf.generic import (
     TextStringObject,
 )
 
-import pdf_size_fit.monochrome_fit as monochrome_fit
+import pdf_size_fit.color_fit as color_fit
 from pdf_size_fit.diagnose import Diagnosis, Route
-from pdf_size_fit.monochrome_fit import (
-    MonochromeFitStatus,
-    fit_monochrome_vector_pdf,
+from pdf_size_fit.color_fit import (
+    ColorFitStatus,
+    fit_color_vector_pdf,
 )
 
 
@@ -80,33 +78,22 @@ def _escape_pdf_text(text: str) -> str:
 
 def _generate_vector_text_pdf(
     path: Path,
-    page_lines: tuple[tuple[str, ...], ...],
-    *,
-    repeats: int = 8_000,
+    pages: tuple[tuple[str, ...], ...],
+    color: bool = True,
+    repeats: int = 1,
 ) -> None:
     writer = PdfWriter()
-    font = DictionaryObject(
-        {
-            NameObject("/Type"): NameObject("/Font"),
-            NameObject("/Subtype"): NameObject("/Type1"),
-            NameObject("/BaseFont"): NameObject("/Helvetica"),
-        }
-    )
-    font_ref = writer._add_object(font)
-    drawing = b"0 G\n0.5 w\n" + (b"40 40 m 540 790 l S\n" * repeats)
-    for lines in page_lines:
-        page = writer.add_blank_page(width=595, height=842)
-        page[NameObject("/Resources")] = DictionaryObject(
-            {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref})}
-        )
-        text_operations = ["BT /F1 12 Tf 72 720 Td"]
-        for index, line in enumerate(lines):
-            if index:
-                text_operations.append("0 -14 Td")
-            text_operations.append(f"({_escape_pdf_text(line)}) Tj")
-        text_operations.append("ET")
+    stroke = b"0.8 0.1 0.1 RG\n" if color else b"0 G\n"
+    for text_lines in pages:
+        page = writer.add_blank_page(width=595.0, height=842.0)
+        drawing = []
+        for line in text_lines:
+            drawing.append(b"40 40 m 540 790 l S\n" * repeats)
+            drawing.append(
+                b"BT /F1 12 Tf 100 100 Td (" + line.encode("latin-1") + b") Tj ET\n"
+            )
         stream = DecodedStreamObject()
-        stream.set_data(drawing + " ".join(text_operations).encode("ascii"))
+        stream.set_data(stroke + b"0.5 w\n" + b"".join(drawing))
         page.replace_contents(stream)
     with path.open("wb") as output:
         writer.write(output)
@@ -190,7 +177,7 @@ def _fit_target(source: Path) -> int:
     return source.stat().st_size - 1
 
 
-def _force_vector_monochrome_diagnosis(
+def _force_vector_color_diagnosis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def routed_diagnosis(
@@ -209,27 +196,26 @@ def _force_vector_monochrome_diagnosis(
             image_ratio=0.0,
             vector_ratio=0.0,
             rendered_color_fraction=0.0,
-            route=Route.VECTOR_MONOCHROME,
+            route=Route.VECTOR_COLOR,
             reasons=("synthetic vector-monochrome route precondition",),
         )
 
-    monkeypatch.setattr(monochrome_fit, "diagnose_pdf", routed_diagnosis)
+    monkeypatch.setattr(color_fit, "diagnose_pdf", routed_diagnosis)
 
 
-def test_successful_fixed_300_dpi_monochrome_fit_is_1bit_ccitt_g4(
+def test_successful_fixed_300_dpi_color_fit_is_1bit_ccitt_g4(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "output.pdf"
-    _generate_vector_pdf(source)
+    _generate_vector_pdf(source, color=True)
     before_hash = _sha256(source)
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
+    result = fit_color_vector_pdf(source, output, target_bytes=_fit_target(source))
 
-    assert result.status is MonochromeFitStatus.FITTED
-    assert result.dpi == 300
-    assert result.bits_per_pixel == 1
-    assert result.compression == "CCITT Group 4"
+    assert result.status is ColorFitStatus.FITTED
+    assert result.dpi == 200
+    assert result.jpeg_quality == 90
     assert result.output_size_bytes is not None
     assert result.output_size_bytes <= result.target_bytes
     assert output.exists()
@@ -238,23 +224,20 @@ def test_successful_fixed_300_dpi_monochrome_fit_is_1bit_ccitt_g4(
     image = PdfReader(str(output)).pages[0].images[0]
     image_object = image.indirect_reference.get_object()
     filters = image_object["/Filter"]
-    assert list(filters) == ["/CCITTFaxDecode"]
-    assert image_object["/BitsPerComponent"] == 1
-    decode_params = image_object["/DecodeParms"][0]
-    assert decode_params["/K"] == -1
-    assert bool(decode_params["/BlackIs1"])
+    assert filters == "/DCTDecode"
+    assert image_object["/BitsPerComponent"] == 8
 
 
 def test_fit_refuses_to_overwrite_source_or_existing_output(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "existing.pdf"
-    _generate_vector_pdf(source)
+    _generate_vector_pdf(source, color=True)
     output.write_bytes(b"keep me")
 
     with pytest.raises(ValueError, match="must differ"):
-        fit_monochrome_vector_pdf(source, source, target_bytes=_fit_target(source))
+        fit_color_vector_pdf(source, source, target_bytes=_fit_target(source))
     with pytest.raises(FileExistsError, match="already exists"):
-        fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
+        fit_color_vector_pdf(source, output, target_bytes=_fit_target(source))
 
     assert output.read_bytes() == b"keep me"
 
@@ -264,24 +247,24 @@ def test_fit_skips_input_already_below_target(tmp_path: Path) -> None:
     output = tmp_path / "should-not-exist.pdf"
     _generate_vector_pdf(source, repeats=10)
 
-    result = fit_monochrome_vector_pdf(
+    result = fit_color_vector_pdf(
         source,
         output,
         target_bytes=source.stat().st_size,
     )
 
-    assert result.status is MonochromeFitStatus.SKIP
+    assert result.status is ColorFitStatus.SKIP
     assert not output.exists()
 
 
-def test_fit_requires_existing_vector_monochrome_diagnosis(tmp_path: Path) -> None:
+def test_fit_requires_existing_vector_color_diagnosis(tmp_path: Path) -> None:
     source = tmp_path / "color.pdf"
     output = tmp_path / "should-not-exist.pdf"
-    _generate_vector_pdf(source, color=True)
+    _generate_vector_pdf(source, color=False)
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
+    result = fit_color_vector_pdf(source, output, target_bytes=_fit_target(source))
 
-    assert result.status is MonochromeFitStatus.ROUTE_MISMATCH
+    assert result.status is ColorFitStatus.ROUTE_MISMATCH
     assert "vector-color" in result.reasons[0]
     assert not output.exists()
 
@@ -293,29 +276,34 @@ def test_fit_refuses_non_whitespace_extractable_text(
     source = tmp_path / "extractable-text.pdf"
     output = tmp_path / "should-not-exist.pdf"
     _generate_text_pdf(source, "private-marker-xyz")
-    _force_vector_monochrome_diagnosis(monkeypatch)
+    _force_vector_color_diagnosis(monkeypatch)
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "selectable/searchable text" in result.reasons[0]
     assert "private-marker-xyz" not in result.reasons[0]
     assert not output.exists()
 
 
-def test_text_opt_in_fits_small_repeated_searchable_layer(tmp_path: Path) -> None:
+def test_text_opt_in_fits_small_repeated_searchable_layer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = tmp_path / "small-searchable-layer.pdf"
     output = tmp_path / "output.pdf"
-    _generate_vector_text_pdf(source, (("12345678",), ("12345678",)))
+    _generate_vector_text_pdf(
+        source, (("12345678",), ("12345678",)), color=True, repeats=8000
+    )
+    _force_vector_color_diagnosis(monkeypatch)
 
-    result = fit_monochrome_vector_pdf(
+    result = fit_color_vector_pdf(
         source,
         output,
         target_bytes=_fit_target(source),
         allow_small_searchable_text_rasterization=True,
     )
 
-    assert result.status is MonochromeFitStatus.FITTED
+    assert result.status is ColorFitStatus.FITTED
     assert any("explicit opt-in" in reason for reason in result.reasons)
     assert any("both parsers" in reason for reason in result.reasons)
     assert any("search/copy semantics were lost" in reason for reason in result.reasons)
@@ -329,21 +317,21 @@ def test_text_opt_in_refuses_more_than_eight_chars_on_one_page(
     source = tmp_path / "too-many-page-characters.pdf"
     output = tmp_path / "should-not-exist.pdf"
     _generate_vector_text_pdf(source, (("123456789",),), repeats=1)
-    _force_vector_monochrome_diagnosis(monkeypatch)
+    _force_vector_color_diagnosis(monkeypatch)
     monkeypatch.setattr(
-        monochrome_fit,
+        color_fit,
         "_pdfium_text_metrics",
         lambda *_args: (((0, 0),), None),
     )
 
-    result = fit_monochrome_vector_pdf(
+    result = fit_color_vector_pdf(
         source,
         output,
         target_bytes=1,
         allow_small_searchable_text_rasterization=True,
     )
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "page 1 pypdf" in result.reasons[0]
     assert "9 non-whitespace" in result.reasons[0]
     assert "limit of 8" in result.reasons[0]
@@ -357,21 +345,26 @@ def test_text_opt_in_refuses_more_than_one_non_empty_line(
     source = tmp_path / "too-many-lines.pdf"
     output = tmp_path / "should-not-exist.pdf"
     _generate_vector_text_pdf(source, (("a", "b"),), repeats=1)
-    _force_vector_monochrome_diagnosis(monkeypatch)
+    _force_vector_color_diagnosis(monkeypatch)
     monkeypatch.setattr(
-        monochrome_fit,
+        color_fit,
         "_pdfium_text_metrics",
-        lambda *_args: (((0, 0),), None),
+        lambda *_args: (((2, 2),), None),
+    )
+    monkeypatch.setattr(
+        color_fit,
+        "_pypdf_text_metrics",
+        lambda *_args: (((2, 2),), None),
     )
 
-    result = fit_monochrome_vector_pdf(
+    result = fit_color_vector_pdf(
         source,
         output,
         target_bytes=1,
         allow_small_searchable_text_rasterization=True,
     )
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "page 1 pypdf" in result.reasons[0]
     assert "2 non-empty lines" in result.reasons[0]
     assert "limit of 1" in result.reasons[0]
@@ -385,21 +378,21 @@ def test_text_opt_in_refuses_more_than_256_document_chars(
     source = tmp_path / "too-many-document-characters.pdf"
     output = tmp_path / "should-not-exist.pdf"
     _generate_vector_text_pdf(source, (("12345678",),) * 33, repeats=1)
-    _force_vector_monochrome_diagnosis(monkeypatch)
+    _force_vector_color_diagnosis(monkeypatch)
     monkeypatch.setattr(
-        monochrome_fit,
+        color_fit,
         "_pdfium_text_metrics",
         lambda *_args: (((0, 0),) * 33, None),
     )
 
-    result = fit_monochrome_vector_pdf(
+    result = fit_color_vector_pdf(
         source,
         output,
         target_bytes=1,
         allow_small_searchable_text_rasterization=True,
     )
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "document pypdf" in result.reasons[0]
     assert "264 non-whitespace" in result.reasons[0]
     assert "limit of 256" in result.reasons[0]
@@ -412,21 +405,21 @@ def test_text_opt_in_refuses_pdfium_per_page_bound(
 ) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "should-not-exist.pdf"
-    _generate_vector_pdf(source)
+    _generate_vector_pdf(source, color=True)
     monkeypatch.setattr(
-        monochrome_fit,
+        color_fit,
         "_pdfium_text_metrics",
         lambda *_args: (((9, 1),), None),
     )
 
-    result = fit_monochrome_vector_pdf(
+    result = fit_color_vector_pdf(
         source,
         output,
         target_bytes=1,
         allow_small_searchable_text_rasterization=True,
     )
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "page 1 PDFium" in result.reasons[0]
     assert "9 non-whitespace" in result.reasons[0]
     assert not output.exists()
@@ -439,21 +432,21 @@ def test_text_opt_in_refuses_pdfium_document_bound(
     source = tmp_path / "source.pdf"
     output = tmp_path / "should-not-exist.pdf"
     _generate_vector_text_pdf(source, ((),) * 33, repeats=1)
-    _force_vector_monochrome_diagnosis(monkeypatch)
+    _force_vector_color_diagnosis(monkeypatch)
     monkeypatch.setattr(
-        monochrome_fit,
+        color_fit,
         "_pdfium_text_metrics",
         lambda *_args: (((8, 1),) * 33, None),
     )
 
-    result = fit_monochrome_vector_pdf(
+    result = fit_color_vector_pdf(
         source,
         output,
         target_bytes=1,
         allow_small_searchable_text_rasterization=True,
     )
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "document PDFium" in result.reasons[0]
     assert "264 non-whitespace" in result.reasons[0]
     assert not output.exists()
@@ -465,21 +458,21 @@ def test_text_opt_in_refuses_parser_metric_disagreement(
 ) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "should-not-exist.pdf"
-    _generate_vector_pdf(source)
+    _generate_vector_pdf(source, color=True)
     monkeypatch.setattr(
-        monochrome_fit,
+        color_fit,
         "_pdfium_text_metrics",
         lambda *_args: (((1, 1),), None),
     )
 
-    result = fit_monochrome_vector_pdf(
+    result = fit_color_vector_pdf(
         source,
         output,
         target_bytes=1,
         allow_small_searchable_text_rasterization=True,
     )
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "normalized text metrics disagree" in result.reasons[0]
     assert not output.exists()
 
@@ -490,16 +483,16 @@ def test_default_refuses_text_detected_only_by_pdfium(
 ) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "should-not-exist.pdf"
-    _generate_vector_pdf(source)
+    _generate_vector_pdf(source, color=True)
     monkeypatch.setattr(
-        monochrome_fit,
+        color_fit,
         "_pdfium_text_metrics",
         lambda *_args: (((1, 1),), None),
     )
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "selectable/searchable text" in result.reasons[0]
     assert not output.exists()
 
@@ -510,21 +503,21 @@ def test_text_extraction_failure_fails_closed_with_opt_in(
 ) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "should-not-exist.pdf"
-    _generate_vector_pdf(source)
+    _generate_vector_pdf(source, color=True)
     page_type = type(PdfReader(str(source)).pages[0])
 
     def fail_extraction(_page, *args, **kwargs):
         raise RuntimeError("synthetic extraction failure")
 
     monkeypatch.setattr(page_type, "extract_text", fail_extraction)
-    result = fit_monochrome_vector_pdf(
+    result = fit_color_vector_pdf(
         source,
         output,
         target_bytes=1,
         allow_small_searchable_text_rasterization=True,
     )
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "pypdf text inspection could not be completed reliably" in result.reasons[0]
     assert not output.exists()
 
@@ -535,18 +528,18 @@ def test_non_string_text_extraction_result_fails_closed_with_opt_in(
 ) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "should-not-exist.pdf"
-    _generate_vector_pdf(source)
+    _generate_vector_pdf(source, color=True)
     page_type = type(PdfReader(str(source)).pages[0])
     monkeypatch.setattr(page_type, "extract_text", lambda *_args, **_kwargs: None)
 
-    result = fit_monochrome_vector_pdf(
+    result = fit_color_vector_pdf(
         source,
         output,
         target_bytes=1,
         allow_small_searchable_text_rasterization=True,
     )
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "did not return a reliable string" in result.reasons[0]
     assert not output.exists()
 
@@ -557,9 +550,9 @@ def test_pdfium_text_inspection_failure_fails_closed_with_opt_in(
 ) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "should-not-exist.pdf"
-    _generate_vector_pdf(source)
+    _generate_vector_pdf(source, color=True)
     monkeypatch.setattr(
-        monochrome_fit,
+        color_fit,
         "_pdfium_text_metrics",
         lambda *_args: (
             None,
@@ -567,14 +560,14 @@ def test_pdfium_text_inspection_failure_fails_closed_with_opt_in(
         ),
     )
 
-    result = fit_monochrome_vector_pdf(
+    result = fit_color_vector_pdf(
         source,
         output,
         target_bytes=1,
         allow_small_searchable_text_rasterization=True,
     )
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "PDFium text inspection" in result.reasons[0]
     assert not output.exists()
 
@@ -584,288 +577,33 @@ def test_whitespace_extractable_text_does_not_by_itself_refuse(tmp_path: Path) -
     output = tmp_path / "should-not-exist.pdf"
     _generate_text_pdf(source, "   ")
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
     assert "extractable text" not in result.reasons[0]
-    assert result.status is not MonochromeFitStatus.UNSUPPORTED_DOCUMENT
-    assert not output.exists()
-
-
-def test_fit_refuses_material_grayscale_midtone_content(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = tmp_path / "gray-vector.pdf"
-    output = tmp_path / "should-not-exist.pdf"
-    _generate_gray_vector_pdf(source)
-    _force_vector_monochrome_diagnosis(monkeypatch)
-
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
-
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
-    assert "persistent unsupported-midtone region" in result.reasons[0]
-    assert not output.exists()
-
-
-def test_hard_black_white_edge_has_no_persistent_unsupported_midtone() -> None:
-    image = Image.new("L", (256, 256), 0)
-    image.paste(255, (128, 0, 256, 256))
-
-    assert not monochrome_fit._has_persistent_unsupported_midtone(image)
-    image.close()
-
-
-def test_narrow_black_white_antialias_ramp_remains_eligible() -> None:
-    image = Image.new("L", (256, 256), 0)
-    image.paste(85, (127, 0, 128, 256))
-    image.paste(170, (128, 0, 129, 256))
-    image.paste(255, (129, 0, 256, 256))
-
-    assert not monochrome_fit._has_persistent_unsupported_midtone(image)
-    image.close()
-
-
-def test_uniform_gray_has_persistent_unsupported_midtone() -> None:
-    image = Image.new("L", (256, 256), 128)
-
-    assert monochrome_fit._has_persistent_unsupported_midtone(image)
-    image.close()
-
-
-@pytest.mark.parametrize(
-    ("width", "crosses_provisional_boundary"),
-    [(1, False), (2, False), (3, True), (4, True)],
-)
-def test_gray_stripe_persistence_boundary(
-    width: int,
-    crosses_provisional_boundary: bool,
-) -> None:
-    image = Image.new("L", (256, 256), 255)
-    left = 128 - width // 2
-    image.paste(128, (left, 0, left + width, 256))
-
-    assert (
-        monochrome_fit._has_persistent_unsupported_midtone(image)
-        is crosses_provisional_boundary
-    )
-    image.close()
-
-
-@pytest.mark.parametrize(
-    ("size", "crosses_provisional_boundary"),
-    [(1, False), (2, False), (3, True)],
-)
-def test_gray_patch_persistence_boundary(
-    size: int,
-    crosses_provisional_boundary: bool,
-) -> None:
-    image = Image.new("L", (256, 256), 255)
-    left = 128 - size // 2
-    top = 128 - size // 2
-    image.paste(128, (left, top, left + size, top + size))
-
-    assert (
-        monochrome_fit._has_persistent_unsupported_midtone(image)
-        is crosses_provisional_boundary
-    )
-    image.close()
-
-
-def test_existing_black_white_vector_fixture_remains_eligible(tmp_path: Path) -> None:
-    source = tmp_path / "black-white-vector.pdf"
-    output = tmp_path / "output.pdf"
-    _generate_vector_pdf(source)
-
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
-
-    assert result.status is MonochromeFitStatus.FITTED
-    assert output.exists()
-
-
-@pytest.mark.parametrize("thin", [True, False])
-def test_300dpi_chroma_gate_refuses_saturated_features(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    thin: bool,
-) -> None:
-    source = tmp_path / ("thin-chroma.pdf" if thin else "material-chroma.pdf")
-    output = tmp_path / "should-not-exist.pdf"
-    _generate_chroma_vector_pdf(source, thin=thin)
-    _force_vector_monochrome_diagnosis(monkeypatch)
-
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
-
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
-    assert "material chroma at 300 dpi" in result.reasons[0]
-    assert "RGB channel spread >= 16" in result.reasons[0]
-    assert not output.exists()
-
-
-def test_300dpi_chroma_inspection_failure_fails_closed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = tmp_path / "source.pdf"
-    output = tmp_path / "should-not-exist.pdf"
-    _generate_vector_pdf(source)
-    _force_vector_monochrome_diagnosis(monkeypatch)
-
-    def fail_chroma_inspection(_image: Image.Image) -> bool:
-        raise RuntimeError("synthetic RGB inspection failure")
-
-    monkeypatch.setattr(monochrome_fit, "_has_material_chroma", fail_chroma_inspection)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
-
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
-    assert "300 dpi RGB chroma" in result.reasons[0]
-    assert "RuntimeError" in result.reasons[0]
-    assert not output.exists()
-
-
-def test_candidate_rendering_remains_grayscale_then_pillow_one_bit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = tmp_path / "source.pdf"
-    output = tmp_path / "output.pdf"
-    _generate_vector_pdf(source)
-    _force_vector_monochrome_diagnosis(monkeypatch)
-
-    probe_pdf = pypdfium2.PdfDocument(str(source))
-    probe_page = probe_pdf[0]
-    page_type = type(probe_page)
-    probe_page.close()
-    probe_pdf.close()
-    original_render = page_type.render
-    original_convert = Image.Image.convert
-    grayscale_arguments: list[bool | None] = []
-    conversion_modes: list[str | None] = []
-
-    def record_render(page, *args, **kwargs):
-        grayscale_arguments.append(kwargs.get("grayscale"))
-        return original_render(page, *args, **kwargs)
-
-    def record_convert(image, mode=None, *args, **kwargs):
-        conversion_modes.append(mode)
-        return original_convert(image, mode, *args, **kwargs)
-
-    monkeypatch.setattr(page_type, "render", record_render)
-    monkeypatch.setattr(Image.Image, "convert", record_convert)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
-
-    assert result.status is MonochromeFitStatus.FITTED
-    assert grayscale_arguments[-1] is True
-    assert conversion_modes[-1] == "1"
-    assert False in grayscale_arguments
-    assert output.exists()
-
-
-def test_exact_render_size_is_accepted() -> None:
-    monochrome_fit._require_render_size_within_rounding_tolerance(
-        (1750, 2480),
-        (1750, 2480),
-        1,
-    )
-
-
-@pytest.mark.parametrize(
-    "actual_size",
-    [(1749, 2480), (1751, 2480), (1750, 2479), (1750, 2481)],
-)
-def test_one_pixel_render_size_rounding_is_accepted(
-    actual_size: tuple[int, int],
-) -> None:
-    monochrome_fit._require_render_size_within_rounding_tolerance(
-        actual_size,
-        (1750, 2480),
-        1,
-    )
-
-
-@pytest.mark.parametrize(
-    "actual_size",
-    [(1748, 2480), (1752, 2480), (1750, 2478), (1750, 2482)],
-)
-def test_two_pixel_render_size_mismatch_fails_closed(
-    actual_size: tuple[int, int],
-) -> None:
-    with pytest.raises(RuntimeError, match="within 1 pixel per axis"):
-        monochrome_fit._require_render_size_within_rounding_tolerance(
-            actual_size,
-            (1750, 2480),
-            1,
-        )
-
-
-def test_bilevel_render_failure_fails_closed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = tmp_path / "source.pdf"
-    output = tmp_path / "should-not-exist.pdf"
-    _generate_vector_pdf(source)
-    _force_vector_monochrome_diagnosis(monkeypatch)
-
-    def fail_to_open(_path: str):
-        raise RuntimeError("synthetic PDFium failure")
-
-    monkeypatch.setattr(
-        monochrome_fit,
-        "_pypdf_text_metrics",
-        lambda *_args: (((0, 0),), None),
-    )
-    monkeypatch.setattr(
-        monochrome_fit,
-        "_pdfium_text_metrics",
-        lambda *_args: (((0, 0),), None),
-    )
-    monkeypatch.setattr(pypdfium2, "PdfDocument", fail_to_open)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
-
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
-    assert "bilevel edge-locality" in result.reasons[0]
-    assert not output.exists()
-
-
-def test_bilevel_filter_failure_fails_closed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = tmp_path / "source.pdf"
-    output = tmp_path / "should-not-exist.pdf"
-    _generate_vector_pdf(source)
-
-    def fail_filter(_image, _filter):
-        raise RuntimeError("synthetic Pillow filter failure")
-
-    monkeypatch.setattr(Image.Image, "filter", fail_filter)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
-
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
-    assert "bilevel edge-locality" in result.reasons[0]
+    assert result.status is not ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert not output.exists()
 
 
 def test_target_not_met_does_not_search_dpi_or_write_output(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "should-not-exist.pdf"
-    _generate_vector_pdf(source)
+    _generate_vector_pdf(source, color=True)
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.TARGET_NOT_MET
-    assert result.dpi == 300
+    assert result.status is ColorFitStatus.TARGET_NOT_MET
+    assert result.dpi == 200
     assert "DPI was not reduced or searched" in result.reasons[1]
     assert not output.exists()
 
 
-def test_non_300_dpi_is_rejected(tmp_path: Path) -> None:
+def test_non_200_dpi_is_rejected(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "output.pdf"
-    _generate_vector_pdf(source)
+    _generate_vector_pdf(source, color=True)
 
-    with pytest.raises(ValueError, match="exactly 300"):
-        fit_monochrome_vector_pdf(source, output, dpi=299)
+    with pytest.raises(ValueError, match="exactly 200"):
+        fit_color_vector_pdf(source, output, dpi=299)
 
 
 def test_page_count_size_and_rotation_are_preserved(tmp_path: Path) -> None:
@@ -873,13 +611,14 @@ def test_page_count_size_and_rotation_are_preserved(tmp_path: Path) -> None:
     output = tmp_path / "output.pdf"
     _generate_vector_pdf(
         source,
+        color=True,
         page_specs=((595.0, 842.0, 0), (420.0, 595.0, 90)),
     )
     source_reader = PdfReader(str(source))
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
+    result = fit_color_vector_pdf(source, output, target_bytes=_fit_target(source))
 
-    assert result.status is MonochromeFitStatus.FITTED
+    assert result.status is ColorFitStatus.FITTED
     output_reader = PdfReader(str(output))
     assert len(output_reader.pages) == len(source_reader.pages) == 2
     assert [tuple(float(v) for v in p.mediabox) for p in output_reader.pages] == [
@@ -899,9 +638,9 @@ def test_raw_page_tree_refuses_unknown_root_pages_key(tmp_path: Path) -> None:
         root[NameObject("/CustomPagesSemantics")] = NumberObject(1)
 
     _rewrite(base, source, mutate)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "/CustomPagesSemantics" in result.reasons[0]
     assert not output.exists()
 
@@ -920,9 +659,9 @@ def test_raw_page_tree_refuses_unknown_nested_pages_key(tmp_path: Path) -> None:
         ),
     )
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "/CustomPagesSemantics" in result.reasons[0]
     assert not output.exists()
 
@@ -938,9 +677,9 @@ def test_raw_page_tree_refuses_count_mismatch(tmp_path: Path) -> None:
         root[NameObject("/Count")] = NumberObject(2)
 
     _rewrite(base, source, mutate)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "/Count" in result.reasons[0]
     assert "discovered leaf count" in result.reasons[0]
     assert not output.exists()
@@ -969,9 +708,9 @@ def test_raw_page_tree_refuses_parent_mismatch(tmp_path: Path) -> None:
         leaf[NameObject("/Parent")] = wrong_parent
 
     _rewrite(base, source, mutate)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "/Parent does not match" in result.reasons[0]
     assert not output.exists()
 
@@ -998,9 +737,9 @@ def test_raw_page_tree_refuses_repeated_identity_or_cycle(
         root[NameObject("/Count")] = NumberObject(2)
 
     _rewrite(base, source, mutate)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "repeats an object identity or contains a cycle" in result.reasons[0]
     assert not output.exists()
 
@@ -1023,9 +762,9 @@ def test_raw_page_tree_refuses_missing_or_invalid_type(
             root[NameObject("/Type")] = NameObject(node_type)
 
     _rewrite(base, source, mutate)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "missing or invalid /Type" in result.reasons[0]
     assert not output.exists()
 
@@ -1046,10 +785,10 @@ def test_raw_page_tree_accepts_inherited_rotation_and_preserves_it(
         root[NameObject("/Rotate")] = NumberObject(90)
 
     _rewrite(base, source, mutate)
-    _force_vector_monochrome_diagnosis(monkeypatch)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
+    _force_vector_color_diagnosis(monkeypatch)
+    result = fit_color_vector_pdf(source, output, target_bytes=_fit_target(source))
 
-    assert result.status is MonochromeFitStatus.FITTED
+    assert result.status is ColorFitStatus.FITTED
     assert int(PdfReader(str(output)).pages[0].get("/Rotate", 0)) == 90
 
 
@@ -1070,10 +809,10 @@ def test_raw_page_tree_accepts_inherited_mediabox_and_preserves_it(
         root[NameObject("/MediaBox")] = mediabox
 
     _rewrite(base, source, mutate)
-    _force_vector_monochrome_diagnosis(monkeypatch)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=_fit_target(source))
+    _force_vector_color_diagnosis(monkeypatch)
+    result = fit_color_vector_pdf(source, output, target_bytes=_fit_target(source))
 
-    assert result.status is MonochromeFitStatus.FITTED
+    assert result.status is ColorFitStatus.FITTED
     output_box = tuple(
         float(value) for value in PdfReader(str(output)).pages[0].mediabox
     )
@@ -1147,9 +886,9 @@ def test_fail_closed_safety_refusals(
     _generate_vector_pdf(base)
     _rewrite(base, source, mutate)
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert reason_fragment in result.reasons[0]
     assert not output.exists()
 
@@ -1220,9 +959,9 @@ def test_fit_refuses_unreconstructed_catalog_and_page_semantics(
     _generate_vector_pdf(base)
     _rewrite(base, source, mutate)
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert reason_fragment in result.reasons[0]
     assert not output.exists()
 
@@ -1240,9 +979,9 @@ def test_fit_refuses_signature_field(tmp_path: Path) -> None:
         )
 
     _rewrite(base, source, add_signature)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "signature field" in result.reasons[0]
     assert not output.exists()
 
@@ -1254,9 +993,9 @@ def test_fit_refuses_embedded_file(tmp_path: Path) -> None:
     _generate_vector_pdf(base)
     _rewrite(base, source, lambda writer: writer.add_attachment("note.txt", b"private"))
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "embedded files" in result.reasons[0]
     assert not output.exists()
 
@@ -1274,9 +1013,9 @@ def test_fit_refuses_pdfa_identification_metadata(tmp_path: Path) -> None:
 </rdf:Description></rdf:RDF>"""
 
     _rewrite(base, source, add_pdfa)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "PDF/A" in result.reasons[0]
     assert not output.exists()
 
@@ -1292,9 +1031,9 @@ def test_fit_refuses_encrypted_pdf(tmp_path: Path) -> None:
     with source.open("wb") as encrypted:
         writer.write(encrypted)
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "encrypted" in result.reasons[0]
     assert not output.exists()
 
@@ -1309,8 +1048,8 @@ def test_fit_refuses_different_cropbox(tmp_path: Path) -> None:
         writer.pages[0][NameObject("/CropBox")] = RectangleObject([10, 10, 580, 820])
 
     _rewrite(base, source, crop)
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    result = fit_color_vector_pdf(source, output, target_bytes=1)
 
-    assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
+    assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "CropBox" in result.reasons[0]
     assert not output.exists()

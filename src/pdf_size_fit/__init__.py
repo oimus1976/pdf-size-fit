@@ -2,7 +2,17 @@
 
 from .diagnose import Diagnosis, Route, diagnose_pdf
 from .fit import FitResult, FitStatus, fit_pdf
-from .image_fit import ImageFitAttempt, ImageFitResult, ImageFitStatus, fit_image_heavy_pdf
+from .image_fit import (
+    ImageFitAttempt,
+    ImageFitResult,
+    ImageFitStatus,
+    fit_image_heavy_pdf,
+)
+from .color_fit import (
+    ColorFitResult,
+    ColorFitStatus,
+    fit_color_vector_pdf,
+)
 from .monochrome_fit import (
     MonochromeFitResult,
     MonochromeFitStatus,
@@ -20,6 +30,9 @@ __all__ = [
     "ImageFitResult",
     "ImageFitStatus",
     "fit_image_heavy_pdf",
+    "ColorFitResult",
+    "ColorFitStatus",
+    "fit_color_vector_pdf",
     "MonochromeFitResult",
     "MonochromeFitStatus",
     "fit_monochrome_vector_pdf",

@@ -4,13 +4,13 @@ import argparse
 import json
 from pathlib import Path
 
-from .monochrome_fit import MonochromeFitStatus, fit_monochrome_vector_pdf
+from .color_fit import ColorFitStatus, fit_color_vector_pdf
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Fit a diagnosed monochrome vector PDF by destructive fixed-300-dpi "
+            "Fit a diagnosed color vector PDF by destructive fixed-200-dpi "
             "1-bit CCITT Group 4 rasterization."
         )
     )
@@ -20,8 +20,14 @@ def main() -> int:
     parser.add_argument(
         "--dpi",
         type=int,
-        default=300,
-        help="fixed validated resolution; values other than 300 are rejected",
+        default=200,
+        help="Fixed whole-page rasterization DPI (must be 200)",
+    )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=int,
+        default=90,
+        help="Fixed JPEG encoding quality (must be 90)",
     )
     parser.add_argument(
         "--allow-small-searchable-text-rasterization",
@@ -34,11 +40,12 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
 
-    result = fit_monochrome_vector_pdf(
+    result = fit_color_vector_pdf(
         args.pdf,
         args.output,
         target_bytes=args.target_bytes,
         dpi=args.dpi,
+        jpeg_quality=args.jpeg_quality,
         allow_small_searchable_text_rasterization=(
             args.allow_small_searchable_text_rasterization
         ),
@@ -61,11 +68,7 @@ def main() -> int:
         for reason in result.reasons:
             print(f"- {reason}")
 
-    return (
-        0
-        if result.status in {MonochromeFitStatus.FITTED, MonochromeFitStatus.SKIP}
-        else 2
-    )
+    return 0 if result.status in {ColorFitStatus.FITTED, ColorFitStatus.SKIP} else 2
 
 
 if __name__ == "__main__":

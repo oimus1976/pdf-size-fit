@@ -6,6 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from .diagnose import Diagnosis, Route, diagnose_pdf
+from .color_fit import (
+    FIXED_COLOR_DPI,
+    ColorFitResult,
+    ColorFitStatus,
+    fit_color_vector_pdf,
+)
 from .image_fit import ImageFitResult, ImageFitStatus, fit_image_heavy_pdf
 from .monochrome_fit import (
     FIXED_DPI,
@@ -22,7 +28,7 @@ class FitStatus(str, Enum):
     ROUTE_FAILED = "route-failed"
 
 
-RouteResult = ImageFitResult | MonochromeFitResult
+RouteResult = ImageFitResult | MonochromeFitResult | ColorFitResult
 
 
 @dataclass(frozen=True)
@@ -57,19 +63,27 @@ class FitResult:
 
 def _normalize_route_result(diagnosis: Diagnosis, result: RouteResult) -> FitResult:
     if (
-        isinstance(result, ImageFitResult)
-        and result.status is ImageFitStatus.FITTED
-    ) or (
-        isinstance(result, MonochromeFitResult)
-        and result.status is MonochromeFitStatus.FITTED
+        (isinstance(result, ImageFitResult) and result.status is ImageFitStatus.FITTED)
+        or (
+            isinstance(result, MonochromeFitResult)
+            and result.status is MonochromeFitStatus.FITTED
+        )
+        or (
+            isinstance(result, ColorFitResult)
+            and result.status is ColorFitStatus.FITTED
+        )
     ):
         status = FitStatus.FITTED
     elif (
-        isinstance(result, ImageFitResult)
-        and result.status is ImageFitStatus.ALREADY_BELOW_TARGET
-    ) or (
-        isinstance(result, MonochromeFitResult)
-        and result.status is MonochromeFitStatus.SKIP
+        (
+            isinstance(result, ImageFitResult)
+            and result.status is ImageFitStatus.ALREADY_BELOW_TARGET
+        )
+        or (
+            isinstance(result, MonochromeFitResult)
+            and result.status is MonochromeFitStatus.SKIP
+        )
+        or (isinstance(result, ColorFitResult) and result.status is ColorFitStatus.SKIP)
     ):
         status = FitStatus.ALREADY_BELOW_TARGET
     else:
@@ -146,6 +160,19 @@ def fit_pdf(
         )
         return _normalize_route_result(diagnosis, route_result)
 
+    if diagnosis.route is Route.VECTOR_COLOR:
+        route_result = fit_color_vector_pdf(
+            input_path,
+            output_path,
+            target_bytes=target_bytes,
+            dpi=FIXED_COLOR_DPI,
+            jpeg_quality=90,
+            allow_small_searchable_text_rasterization=(
+                allow_small_searchable_text_rasterization
+            ),
+        )
+        return _normalize_route_result(diagnosis, route_result)
+
     return FitResult(
         status=FitStatus.UNSUPPORTED_ROUTE,
         route=diagnosis.route,
@@ -155,7 +182,8 @@ def fit_pdf(
         output_size_bytes=None,
         target_bytes=target_bytes,
         delegated_route_status=None,
-        reasons=diagnosis.reasons + (
+        reasons=diagnosis.reasons
+        + (
             f"route {diagnosis.route.value!r} has no supported execution path; no output was written",
         ),
     )

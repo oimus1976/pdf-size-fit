@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from typing import Any
 
-from PIL import Image, ImageChops, ImageFilter
+from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import (
     ArrayObject,
@@ -25,7 +25,7 @@ from pypdf.generic import (
 
 from .diagnose import Route, diagnose_pdf
 
-FIXED_DPI = 300
+FIXED_COLOR_DPI = 200
 NEAR_BLACK_MAX = 32
 MIDTONE_MIN = 33
 MIDTONE_MAX = 246
@@ -65,7 +65,7 @@ ALLOWED_PAGES_NODE_KEYS = frozenset(
 )
 
 
-class MonochromeFitStatus(str, Enum):
+class ColorFitStatus(str, Enum):
     FITTED = "fitted"
     SKIP = "skip"
     ROUTE_MISMATCH = "route-mismatch"
@@ -74,19 +74,18 @@ class MonochromeFitStatus(str, Enum):
 
 
 @dataclass(frozen=True)
-class MonochromeFitResult:
-    status: MonochromeFitStatus
+class ColorFitResult:
+    status: ColorFitStatus
     input_path: str
     output_path: str | None
     input_size_bytes: int
     output_size_bytes: int | None
     target_bytes: int
     route: str
-    dpi: int
-    bits_per_pixel: int
-    compression: str
     page_count: int
     reasons: tuple[str, ...]
+    dpi: int | None = None
+    jpeg_quality: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -117,7 +116,7 @@ def _resolve(obj: Any) -> Any:
 
 
 def _result(
-    status: MonochromeFitStatus,
+    status: ColorFitStatus,
     input_path: Path,
     *,
     input_size: int,
@@ -126,20 +125,20 @@ def _result(
     reasons: tuple[str, ...],
     output_path: Path | None = None,
     output_size: int | None = None,
-) -> MonochromeFitResult:
-    return MonochromeFitResult(
+    jpeg_quality: int | None = None,
+) -> ColorFitResult:
+    return ColorFitResult(
         status=status,
         input_path=str(input_path),
         output_path=str(output_path) if output_path is not None else None,
         input_size_bytes=input_size,
         output_size_bytes=output_size,
         target_bytes=target_bytes,
-        route=Route.VECTOR_MONOCHROME.value,
-        dpi=FIXED_DPI,
-        bits_per_pixel=1,
-        compression="CCITT Group 4",
+        route=Route.VECTOR_COLOR.value,
         page_count=page_count,
         reasons=reasons,
+        dpi=FIXED_COLOR_DPI,
+        jpeg_quality=jpeg_quality,
     )
 
 
@@ -563,78 +562,6 @@ def _pdfium_text_metrics(
     return tuple(metrics), None
 
 
-def _has_persistent_unsupported_midtone(grayscale: Image.Image) -> bool:
-    minimum = None
-    maximum = None
-    midtone = None
-    has_near_black = None
-    has_near_white = None
-    bilateral_support = None
-    supported_midtone = None
-    unsupported_midtone = None
-    persistent_unsupported = None
-    try:
-        minimum = grayscale.filter(ImageFilter.MinFilter(MIDTONE_SUPPORT_FILTER_SIZE))
-        maximum = grayscale.filter(ImageFilter.MaxFilter(MIDTONE_SUPPORT_FILTER_SIZE))
-        midtone = grayscale.point(
-            lambda value: 255 if MIDTONE_MIN <= value <= MIDTONE_MAX else 0
-        )
-        has_near_black = minimum.point(
-            lambda value: 255 if value <= NEAR_BLACK_MAX else 0
-        )
-        has_near_white = maximum.point(
-            lambda value: 255 if value >= NEAR_WHITE_MIN else 0
-        )
-        bilateral_support = ImageChops.multiply(has_near_black, has_near_white)
-        supported_midtone = ImageChops.multiply(midtone, bilateral_support)
-        unsupported_midtone = ImageChops.subtract(midtone, supported_midtone)
-        persistent_unsupported = unsupported_midtone.filter(
-            ImageFilter.MinFilter(MIDTONE_PERSISTENCE_FILTER_SIZE)
-        )
-        return persistent_unsupported.getbbox() is not None
-    finally:
-        for image in (
-            persistent_unsupported,
-            unsupported_midtone,
-            supported_midtone,
-            bilateral_support,
-            has_near_white,
-            has_near_black,
-            midtone,
-            maximum,
-            minimum,
-        ):
-            if image is not None:
-                image.close()
-
-
-def _has_material_chroma(rgb: Image.Image) -> bool:
-    channels = rgb.split()
-    try:
-        if len(channels) != 3:
-            raise RuntimeError("RGB inspection did not produce exactly three channels")
-        for first, second in ((0, 1), (0, 2), (1, 2)):
-            difference = ImageChops.difference(channels[first], channels[second])
-            try:
-                extrema = difference.getextrema()
-                if (
-                    not isinstance(extrema, tuple)
-                    or len(extrema) != 2
-                    or not all(isinstance(value, int) for value in extrema)
-                ):
-                    raise RuntimeError(
-                        "RGB channel spread could not be inspected reliably"
-                    )
-                if extrema[1] >= MATERIAL_CHROMA_CHANNEL_SPREAD:
-                    return True
-            finally:
-                difference.close()
-        return False
-    finally:
-        for channel in channels:
-            channel.close()
-
-
 def _require_render_size_within_rounding_tolerance(
     actual_size: tuple[int, int],
     expected_size: tuple[int, int],
@@ -646,106 +573,9 @@ def _require_render_size_within_rounding_tolerance(
     ):
         raise RuntimeError(
             f"page {page_number} rendered at {actual_size}, expected {expected_size} "
-            f"at {FIXED_DPI} dpi within {MAX_RENDER_SIZE_ROUNDING_DELTA} pixel "
+            f"at {FIXED_COLOR_DPI} dpi within {MAX_RENDER_SIZE_ROUNDING_DELTA} pixel "
             "per axis"
         )
-
-
-def _bilevel_suitability_refusal(
-    input_path: Path,
-    page_specs: tuple[_PageSpec, ...],
-) -> str | None:
-    try:
-        import pypdfium2 as pdfium
-
-        pdf = pdfium.PdfDocument(str(input_path))
-        try:
-            if len(pdf) != len(page_specs):
-                raise RuntimeError("PDFium and pypdf disagree on the source page count")
-            for index, spec in enumerate(page_specs, start=1):
-                source_page = pdf[index - 1]
-                rgb_bitmap = None
-                rgb = None
-                bitmap = None
-                grayscale = None
-                try:
-                    normalized_rotation = spec.rotation % 360
-                    if source_page.get_rotation() != normalized_rotation:
-                        raise RuntimeError(
-                            f"page {index} rotation differs between PDF readers"
-                        )
-                    expected_size = (
-                        ceil(spec.width * FIXED_DPI / 72.0),
-                        ceil(spec.height * FIXED_DPI / 72.0),
-                    )
-                    rgb_bitmap = source_page.render(
-                        scale=FIXED_DPI / 72.0,
-                        rotation=(-normalized_rotation) % 360,
-                        grayscale=False,
-                        draw_annots=False,
-                    )
-                    rgb = rgb_bitmap.to_pil().convert("RGB")
-                    _require_render_size_within_rounding_tolerance(
-                        rgb.size,
-                        expected_size,
-                        index,
-                    )
-                    if _has_material_chroma(rgb):
-                        return (
-                            f"page {index} contains material chroma at {FIXED_DPI} "
-                            "dpi: at least one pixel has RGB channel spread "
-                            f">= {MATERIAL_CHROMA_CHANNEL_SPREAD}"
-                        )
-                    rgb.close()
-                    rgb = None
-                    rgb_bitmap.close()
-                    rgb_bitmap = None
-
-                    bitmap = source_page.render(
-                        scale=FIXED_DPI / 72.0,
-                        rotation=(-normalized_rotation) % 360,
-                        grayscale=True,
-                        draw_annots=False,
-                    )
-                    grayscale = bitmap.to_pil().convert("L")
-                    _require_render_size_within_rounding_tolerance(
-                        grayscale.size,
-                        expected_size,
-                        index,
-                    )
-                    histogram = grayscale.histogram()
-                    total_pixels = grayscale.width * grayscale.height
-                    if len(histogram) != 256 or total_pixels <= 0:
-                        raise RuntimeError(
-                            f"page {index} did not produce a valid 8-bit grayscale image"
-                        )
-                    if _has_persistent_unsupported_midtone(grayscale):
-                        return (
-                            f"page {index} contains a persistent unsupported-midtone "
-                            f"region: a complete {MIDTONE_PERSISTENCE_FILTER_SIZE}x"
-                            f"{MIDTONE_PERSISTENCE_FILTER_SIZE} block of luminance "
-                            f"{MIDTONE_MIN}..{MIDTONE_MAX} pixels lacks bilateral "
-                            f"near-black 0..{NEAR_BLACK_MAX} and near-white "
-                            f"{NEAR_WHITE_MIN}..255 edge support"
-                        )
-                finally:
-                    if grayscale is not None:
-                        grayscale.close()
-                    if bitmap is not None:
-                        bitmap.close()
-                    if rgb is not None:
-                        rgb.close()
-                    if rgb_bitmap is not None:
-                        rgb_bitmap.close()
-                    source_page.close()
-        finally:
-            pdf.close()
-    except Exception as exc:
-        return (
-            "300 dpi RGB chroma or bilevel edge-locality rendering or inspection "
-            f"could not be completed reliably ({type(exc).__name__})"
-        )
-    return None
 
 
 def _destructive_content_refusal(
@@ -824,15 +654,12 @@ def _destructive_content_refusal(
                     False,
                 )
 
-    return (
-        _bilevel_suitability_refusal(input_path, page_specs),
-        bool(pages_with_text and allow_small_searchable_text_rasterization),
-    )
+    return None, bool(pages_with_text and allow_small_searchable_text_rasterization)
 
 
 def _single_ccitt_image(image: Image.Image, writer: PdfWriter) -> IndirectObject:
     buffer = BytesIO()
-    image.save(buffer, format="PDF", resolution=float(FIXED_DPI))
+    image.save(buffer, format="PDF", resolution=float(FIXED_COLOR_DPI))
     buffer.seek(0)
     image_reader = PdfReader(buffer)
     images = image_reader.pages[0].images
@@ -884,16 +711,44 @@ def _number(value: float) -> bytes:
     return format(value, ".12g").encode("ascii")
 
 
+def _single_jpeg_image(
+    image: Image.Image, writer: PdfWriter, jpeg_quality: int
+) -> IndirectObject:
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG", quality=jpeg_quality, optimize=True)
+    buffer.seek(0)
+
+    stream = StreamObject()
+    stream._data = buffer.read()
+
+    image_dict = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/XObject"),
+            NameObject("/Subtype"): NameObject("/Image"),
+            NameObject("/Width"): NumberObject(image.width),
+            NameObject("/Height"): NumberObject(image.height),
+            NameObject("/ColorSpace"): NameObject("/DeviceRGB"),
+            NameObject("/BitsPerComponent"): NumberObject(8),
+            NameObject("/Filter"): NameObject("/DCTDecode"),
+            NameObject("/Length"): NumberObject(len(stream._data)),
+        }
+    )
+
+    stream.update(image_dict)
+    return writer._add_object(stream)
+
+
 def _build_candidate(
     input_path: Path,
     candidate_path: Path,
     page_specs: tuple[_PageSpec, ...],
+    jpeg_quality: int,
 ) -> None:
     import pypdfium2 as pdfium
 
     pdf = pdfium.PdfDocument(str(input_path))
     writer = PdfWriter()
-    scale = FIXED_DPI / 72.0
+    scale = FIXED_COLOR_DPI / 72.0
     try:
         if len(pdf) != len(page_specs):
             raise RuntimeError("PDFium and pypdf disagree on the source page count")
@@ -909,10 +764,10 @@ def _build_candidate(
                 bitmap = source_page.render(
                     scale=scale,
                     rotation=(-normalized_rotation) % 360,
-                    grayscale=True,
+                    grayscale=False,
                     draw_annots=False,
                 )
-                monochrome = bitmap.to_pil().convert("1")
+                rgb_image = bitmap.to_pil().convert("RGB")
             finally:
                 if bitmap is not None:
                     bitmap.close()
@@ -920,12 +775,12 @@ def _build_candidate(
 
             expected_size = (ceil(spec.width * scale), ceil(spec.height * scale))
             _require_render_size_within_rounding_tolerance(
-                monochrome.size,
+                rgb_image.size,
                 expected_size,
                 index + 1,
             )
 
-            image_ref = _single_ccitt_image(monochrome, writer)
+            image_ref = _single_jpeg_image(rgb_image, writer, jpeg_quality)
             page = writer.add_blank_page(width=spec.width, height=spec.height)
             page[NameObject("/MediaBox")] = RectangleObject(spec.mediabox)
             page[NameObject("/Rotate")] = NumberObject(spec.rotation)
@@ -995,14 +850,11 @@ def _verify_candidate(input_path: Path, candidate_path: Path) -> None:
         if isinstance(decode_params, (ArrayObject, list)) and len(decode_params) == 1:
             decode_params = _resolve(decode_params[0])
         if (
-            filters != ("/CCITTFaxDecode",)
-            or image_object.get("/BitsPerComponent") != 1
-            or image_object.get("/ColorSpace") != "/DeviceGray"
-            or not isinstance(decode_params, DictionaryObject)
-            or decode_params.get("/K") != -1
-            or decode_params.get("/BlackIs1") != BooleanObject(True)
+            filters != ("/DCTDecode",)
+            or image_object.get("/BitsPerComponent") != 8
+            or image_object.get("/ColorSpace") != "/DeviceRGB"
         ):
-            raise RuntimeError(f"candidate page {index} is not 1-bit CCITT Group 4")
+            raise RuntimeError(f"candidate page {index} is not RGB JPEG")
 
 
 def _copy_exclusive(source: Path, destination: Path) -> None:
@@ -1017,18 +869,21 @@ def _copy_exclusive(source: Path, destination: Path) -> None:
         raise
 
 
-def fit_monochrome_vector_pdf(
+def fit_color_vector_pdf(
     input_path: str | Path,
     output_path: str | Path,
     *,
     target_bytes: int = 10_000_000,
-    dpi: int = FIXED_DPI,
+    dpi: int = FIXED_COLOR_DPI,
+    jpeg_quality: int = 90,
     allow_small_searchable_text_rasterization: bool = False,
-) -> MonochromeFitResult:
+) -> ColorFitResult:
     if target_bytes <= 0:
         raise ValueError("target_bytes must be greater than zero")
-    if dpi != FIXED_DPI:
-        raise ValueError("dpi must be exactly 300; DPI search is not validated")
+    if dpi != FIXED_COLOR_DPI:
+        raise ValueError("dpi must be exactly 200; DPI search is not validated")
+    if jpeg_quality != 90:
+        raise ValueError("jpeg_quality must be exactly 90; search is not validated")
 
     input_path = Path(input_path)
     output_path = Path(output_path)
@@ -1041,7 +896,7 @@ def fit_monochrome_vector_pdf(
     if input_size <= target_bytes:
         reader = PdfReader(str(input_path))
         return _result(
-            MonochromeFitStatus.SKIP,
+            ColorFitStatus.SKIP,
             input_path,
             input_size=input_size,
             target_bytes=target_bytes,
@@ -1055,7 +910,7 @@ def fit_monochrome_vector_pdf(
     page_specs, refusal = _preflight(reader)
     if refusal is not None or page_specs is None:
         return _result(
-            MonochromeFitStatus.UNSUPPORTED_DOCUMENT,
+            ColorFitStatus.UNSUPPORTED_DOCUMENT,
             input_path,
             input_size=input_size,
             target_bytes=target_bytes,
@@ -1066,15 +921,15 @@ def fit_monochrome_vector_pdf(
         )
 
     diagnosis = diagnose_pdf(input_path, target_bytes=target_bytes)
-    if diagnosis.route is not Route.VECTOR_MONOCHROME:
+    if diagnosis.route is not Route.VECTOR_COLOR:
         return _result(
-            MonochromeFitStatus.ROUTE_MISMATCH,
+            ColorFitStatus.ROUTE_MISMATCH,
             input_path,
             input_size=input_size,
             target_bytes=target_bytes,
             page_count=len(page_specs),
             reasons=(
-                f"diagnosis proposed route {diagnosis.route.value!r}, not 'vector-monochrome'",
+                f"diagnosis proposed route {diagnosis.route.value!r}, not 'vector-color'",
                 "no output was written",
             ),
         )
@@ -1089,7 +944,7 @@ def fit_monochrome_vector_pdf(
     )
     if refusal is not None:
         return _result(
-            MonochromeFitStatus.UNSUPPORTED_DOCUMENT,
+            ColorFitStatus.UNSUPPORTED_DOCUMENT,
             input_path,
             input_size=input_size,
             target_bytes=target_bytes,
@@ -1101,19 +956,19 @@ def fit_monochrome_vector_pdf(
     output_created = False
     try:
         with tempfile.TemporaryDirectory(prefix="pdf-size-fit-monochrome-") as temp_dir:
-            candidate = Path(temp_dir) / "candidate-300dpi-g4.pdf"
-            _build_candidate(input_path, candidate, page_specs)
+            candidate = Path(temp_dir) / "candidate-200dpi-q90.pdf"
+            _build_candidate(input_path, candidate, page_specs, jpeg_quality)
             _verify_candidate(input_path, candidate)
             candidate_size = candidate.stat().st_size
             if candidate_size > target_bytes:
                 return _result(
-                    MonochromeFitStatus.TARGET_NOT_MET,
+                    ColorFitStatus.TARGET_NOT_MET,
                     input_path,
                     input_size=input_size,
                     target_bytes=target_bytes,
                     page_count=len(page_specs),
                     reasons=(
-                        f"fixed 300 dpi candidate is {candidate_size} bytes, above target {target_bytes} bytes",
+                        f"fixed 200 dpi / q90 candidate is {candidate_size} bytes, above target {target_bytes} bytes",
                         "DPI was not reduced or searched; no output was written",
                     ),
                 )
@@ -1131,8 +986,8 @@ def fit_monochrome_vector_pdf(
         raise
 
     reasons = [
-        "diagnosis selected the vector-monochrome route for the requested target",
-        "all pages were rendered by PDFium at fixed 300 dpi and encoded as 1-bit CCITT Group 4",
+        "diagnosis selected the vector-color route for the requested target",
+        "all pages were rendered by PDFium at fixed 200 dpi and encoded as RGB JPEG",
         "page count, MediaBox dimensions, rotation, reader reopenability, encoding, and target size were verified",
     ]
     if small_searchable_text_rasterized:
@@ -1146,12 +1001,13 @@ def fit_monochrome_vector_pdf(
     )
 
     return _result(
-        MonochromeFitStatus.FITTED,
+        ColorFitStatus.FITTED,
         input_path,
         input_size=input_size,
         target_bytes=target_bytes,
         page_count=len(page_specs),
         output_path=output_path,
         output_size=output_size,
+        jpeg_quality=jpeg_quality,
         reasons=tuple(reasons),
     )

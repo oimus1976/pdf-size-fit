@@ -9,6 +9,7 @@ from pdf_size_fit.diagnose import Diagnosis, Route
 from pdf_size_fit.fit import FitResult, FitStatus, fit_pdf
 from pdf_size_fit.fit_cli import main
 from pdf_size_fit.image_fit import ImageFitResult, ImageFitStatus
+from pdf_size_fit.color_fit import ColorFitResult, ColorFitStatus, FIXED_COLOR_DPI
 from pdf_size_fit.monochrome_fit import MonochromeFitResult, MonochromeFitStatus
 
 
@@ -77,7 +78,9 @@ def test_skip_returns_success_without_calling_execution_routes(
     source = tmp_path / "input.pdf"
     output = tmp_path / "output.pdf"
     diagnosis = _diagnosis(source, Route.SKIP)
-    monkeypatch.setattr("pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
 
     def unexpected(*args: object, **kwargs: object) -> None:
         pytest.fail("an execution route was called")
@@ -99,7 +102,9 @@ def test_image_heavy_dispatches_only_to_image_route_and_forwards_options(
     source = tmp_path / "input.pdf"
     output = tmp_path / "output.pdf"
     diagnosis = _diagnosis(source, Route.IMAGE_HEAVY)
-    monkeypatch.setattr("pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
     calls: list[tuple[object, ...]] = []
 
     def image_route(*args: object, **kwargs: object) -> ImageFitResult:
@@ -136,7 +141,9 @@ def test_vector_monochrome_dispatches_only_to_monochrome_and_forwards_options(
     source = tmp_path / "input.pdf"
     output = tmp_path / "output.pdf"
     diagnosis = _diagnosis(source, Route.VECTOR_MONOCHROME)
-    monkeypatch.setattr("pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
     calls: list[tuple[object, ...]] = []
 
     def monochrome_route(*args: object, **kwargs: object) -> MonochromeFitResult:
@@ -166,14 +173,16 @@ def test_vector_monochrome_dispatches_only_to_monochrome_and_forwards_options(
     }
 
 
-@pytest.mark.parametrize("route", [Route.VECTOR_COLOR, Route.UNCLASSIFIED])
+@pytest.mark.parametrize("route", [Route.UNCLASSIFIED])
 def test_unsupported_routes_fail_closed_without_output(
     route: Route, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "input.pdf"
     output = tmp_path / "output.pdf"
     diagnosis = _diagnosis(source, route)
-    monkeypatch.setattr("pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
 
     def unexpected(*args: object, **kwargs: object) -> None:
         pytest.fail("an execution route was called")
@@ -197,8 +206,12 @@ def test_delegated_fitted_result_is_normalized_with_route_details(
     output = tmp_path / "output.pdf"
     diagnosis = _diagnosis(source, Route.IMAGE_HEAVY)
     delegated = _image_result(source, output)
-    monkeypatch.setattr("pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis)
-    monkeypatch.setattr("pdf_size_fit.fit.fit_image_heavy_pdf", lambda *args, **kwargs: delegated)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.fit_image_heavy_pdf", lambda *args, **kwargs: delegated
+    )
 
     result = fit_pdf(source, output, target_bytes=10_000)
     data = result.to_dict()
@@ -223,7 +236,9 @@ def test_delegated_refusal_is_non_success_and_preserves_evidence(
     delegated = _monochrome_result(
         source, output, MonochromeFitStatus.UNSUPPORTED_DOCUMENT
     )
-    monkeypatch.setattr("pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
     monkeypatch.setattr(
         "pdf_size_fit.fit.fit_monochrome_vector_pdf", lambda *args, **kwargs: delegated
     )
@@ -307,3 +322,42 @@ def test_preexisting_destination_is_not_overwritten(
         fit_pdf(source, output, target_bytes=10_000)
 
     assert output.read_bytes() == original
+
+
+def test_vector_color_dispatches_to_color_fit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "input.pdf"
+    output = tmp_path / "output.pdf"
+    source.write_bytes(b"mock pdf")
+    diagnosis = _diagnosis(source, Route.VECTOR_COLOR)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
+
+    called = False
+
+    def mock_fit(*args: object, **kwargs: object) -> ColorFitResult:
+        nonlocal called
+        called = True
+        return ColorFitResult(
+            status=ColorFitStatus.FITTED,
+            input_path=str(source),
+            output_path=str(output),
+            input_size_bytes=8,
+            output_size_bytes=4,
+            target_bytes=10_000,
+            route=Route.VECTOR_COLOR.value,
+            dpi=FIXED_COLOR_DPI,
+            jpeg_quality=90,
+            page_count=1,
+            reasons=("mock reason",),
+        )
+
+    monkeypatch.setattr("pdf_size_fit.fit.fit_color_vector_pdf", mock_fit)
+
+    result = fit_pdf(source, output, target_bytes=10_000)
+
+    assert called
+    assert result.status is FitStatus.FITTED
+    assert result.route is Route.VECTOR_COLOR
