@@ -8,6 +8,10 @@ The project is currently experimental and does not yet use formal releases.
 
 ### Added
 
+- Color vector fitting PoC for `vector-color` diagnosis.
+- Whole-page rasterization at fixed 200 dpi / JPEG quality 90.
+- `pdf-size-fit-color` entry point and module for testing and debugging.
+
 - Initial repository documentation and project scope.
 - Intended use case: fit a single oversized PDF under an attachment-size limit without splitting when practical.
 - Three experimental compression-route hypotheses:
