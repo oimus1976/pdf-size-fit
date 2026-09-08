@@ -85,7 +85,8 @@ class ColorFitResult:
     page_count: int
     reasons: tuple[str, ...]
     dpi: int | None = None
-    jpeg_quality: int | None = None
+    jpeg_quality: int | None = (None,)
+    searchable_text_semantics_lost: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -126,6 +127,7 @@ def _result(
     output_path: Path | None = None,
     output_size: int | None = None,
     jpeg_quality: int | None = None,
+    searchable_text_semantics_lost: bool | None = None,
 ) -> ColorFitResult:
     return ColorFitResult(
         status=status,
@@ -824,6 +826,8 @@ def _page_signature(
 
 
 def _verify_candidate(input_path: Path, candidate_path: Path) -> None:
+    import pypdfium2 as pdfium
+
     source = PdfReader(str(input_path))
     candidate = PdfReader(str(candidate_path))
     if candidate.is_encrypted:
@@ -855,6 +859,26 @@ def _verify_candidate(input_path: Path, candidate_path: Path) -> None:
             or image_object.get("/ColorSpace") != "/DeviceRGB"
         ):
             raise RuntimeError(f"candidate page {index} is not RGB JPEG")
+
+    pdf = pdfium.PdfDocument(str(candidate_path))
+    try:
+        if len(pdf) != len(source.pages):
+            raise RuntimeError("candidate page count disagrees with pypdf source")
+        for i in range(len(pdf)):
+            page = pdf[i]
+            bitmap = None
+            try:
+                bitmap = page.render(scale=1.0)
+            except Exception as e:
+                raise RuntimeError(
+                    f"candidate page {i + 1} failed PDFium rendering: {e}"
+                )
+            finally:
+                if bitmap is not None:
+                    bitmap.close()
+                page.close()
+    finally:
+        pdf.close()
 
 
 def _copy_exclusive(source: Path, destination: Path) -> None:
@@ -955,7 +979,7 @@ def fit_color_vector_pdf(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_created = False
     try:
-        with tempfile.TemporaryDirectory(prefix="pdf-size-fit-monochrome-") as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="pdf-size-fit-color-") as temp_dir:
             candidate = Path(temp_dir) / "candidate-200dpi-q90.pdf"
             _build_candidate(input_path, candidate, page_specs, jpeg_quality)
             _verify_candidate(input_path, candidate)
@@ -1009,5 +1033,10 @@ def fit_color_vector_pdf(
         output_path=output_path,
         output_size=output_size,
         jpeg_quality=jpeg_quality,
+        searchable_text_semantics_lost=(
+            small_searchable_text_rasterized
+            if small_searchable_text_rasterized
+            else False
+        ),
         reasons=tuple(reasons),
     )

@@ -76,7 +76,9 @@ def test_decimal_mb_to_bytes(value: str, expected: int) -> None:
     assert decimal_mb_to_bytes(value) == expected
 
 
-@pytest.mark.parametrize("value", ["", "abc", "0", "-1", "NaN", "Infinity", "0.0000001"])
+@pytest.mark.parametrize(
+    "value", ["", "abc", "0", "-1", "NaN", "Infinity", "0.0000001"]
+)
 def test_decimal_mb_to_bytes_rejects_invalid_values(value: str) -> None:
     with pytest.raises(ValueError):
         decimal_mb_to_bytes(value)
@@ -86,9 +88,7 @@ def test_gui_request_maps_exactly_to_fit_pdf_arguments(tmp_path: Path) -> None:
     source = tmp_path / "input.pdf"
     source.write_bytes(b"synthetic")
     output = tmp_path / "output.pdf"
-    request = build_request(
-        str(source), str(output), "10", "73", "81", True
-    )
+    request = build_request(str(source), str(output), "10", "73", "81", True)
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     def fitter(*args: object, **kwargs: object) -> FitResult:
@@ -122,7 +122,9 @@ def test_gui_request_preserves_safe_defaults(tmp_path: Path) -> None:
     assert request.allow_small_searchable_text_rasterization is False
 
 
-def test_simple_request_fixes_target_and_keeps_destructive_options_off(tmp_path: Path) -> None:
+def test_simple_request_fixes_target_and_keeps_destructive_options_off(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "input.pdf"
     source.write_bytes(b"synthetic")
 
@@ -347,7 +349,9 @@ def test_simple_oversized_input_maps_to_integrated_backend_once(tmp_path: Path) 
     ]
 
 
-def test_shell_argument_and_gui_drop_use_the_same_simple_backend_path(tmp_path: Path) -> None:
+def test_shell_argument_and_gui_drop_use_the_same_simple_backend_path(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "name with spaces.pdf"
     with source.open("wb") as stream:
         stream.truncate(10_000_001)
@@ -379,7 +383,9 @@ def test_simple_presentation_hides_backend_controls_and_route() -> None:
     assert "ルート" not in visible
 
 
-def test_gui_request_rejects_input_or_existing_output_as_destination(tmp_path: Path) -> None:
+def test_gui_request_rejects_input_or_existing_output_as_destination(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "input.pdf"
     source.write_bytes(b"synthetic")
     existing = tmp_path / "existing.pdf"
@@ -396,7 +402,12 @@ def test_gui_request_rejects_input_or_existing_output_as_destination(tmp_path: P
     ("status", "delegated", "category", "japanese_text"),
     [
         (FitStatus.FITTED, "fitted", "fitted", "変換しました"),
-        (FitStatus.ALREADY_BELOW_TARGET, None, "already-below-target", "作成していません"),
+        (
+            FitStatus.ALREADY_BELOW_TARGET,
+            None,
+            "already-below-target",
+            "作成していません",
+        ),
         (FitStatus.UNSUPPORTED_ROUTE, None, "unsupported-route", "未対応"),
         (FitStatus.ROUTE_FAILED, "target-not-met", "target-not-met", "到達"),
         (FitStatus.ROUTE_FAILED, "unsupported-document", "delegated-refusal", "拒否"),
@@ -408,9 +419,7 @@ def test_backend_statuses_map_to_user_facing_results(
     category: str,
     japanese_text: str,
 ) -> None:
-    presentation = present_result(
-        _result(status, delegated_route_status=delegated)
-    )
+    presentation = present_result(_result(status, delegated_route_status=delegated))
     assert presentation.category == category
     assert japanese_text in presentation.title + presentation.summary
     assert "backend evidence" in presentation.details
@@ -431,7 +440,10 @@ def test_launcher_and_gui_entry_point_exist() -> None:
     assert ".venv\\Scripts\\pythonw.exe" in launcher
     assert "-m pdf_size_fit.gui %*" in launcher
     assert "pause" in launcher.lower()
-    assert metadata["project"]["gui-scripts"]["pdf-size-fit-gui"] == "pdf_size_fit.gui:main"
+    assert (
+        metadata["project"]["gui-scripts"]["pdf-size-fit-gui"]
+        == "pdf_size_fit.gui:main"
+    )
     assert any(
         dependency.startswith("tkinterdnd2")
         for dependency in metadata["project"]["dependencies"]

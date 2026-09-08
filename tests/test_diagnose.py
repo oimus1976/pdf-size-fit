@@ -4,7 +4,11 @@ import pytest
 from pypdf import PdfReader, PdfWriter
 
 from pdf_size_fit.diagnose import Route, diagnose_pdf
-from tools.generate_fixtures import generate_image_heavy, generate_small, generate_vector
+from tools.generate_fixtures import (
+    generate_image_heavy,
+    generate_small,
+    generate_vector,
+)
 
 
 def test_skip_below_target(tmp_path: Path) -> None:
@@ -40,7 +44,9 @@ def test_color_vector_route(tmp_path: Path) -> None:
     assert result.rendered_color_fraction >= 0.01
 
 
-def test_color_on_middle_page_is_not_misclassified_as_monochrome(tmp_path: Path) -> None:
+def test_color_on_middle_page_is_not_misclassified_as_monochrome(
+    tmp_path: Path,
+) -> None:
     mono = tmp_path / "mono4.pdf"
     color = tmp_path / "color1.pdf"
     mixed = tmp_path / "mixed.pdf"
