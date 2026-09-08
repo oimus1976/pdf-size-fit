@@ -94,9 +94,7 @@ def _clone_with_leading_unreachable_object(source: Path, output: Path) -> None:
         writer.write(fh)
 
 
-def test_target_not_met_is_explicit_when_downsampling_is_disabled(
-    tmp_path: Path,
-) -> None:
+def test_target_not_met_is_explicit_when_downsampling_is_disabled(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "should-not-exist.pdf"
     generate_image_heavy(source, pages=1, image_size=300)
@@ -117,9 +115,7 @@ def test_target_not_met_is_explicit_when_downsampling_is_disabled(
     assert not output.exists()
 
 
-def test_downsampling_runs_only_after_full_resolution_quality_search_fails(
-    tmp_path: Path,
-) -> None:
+def test_downsampling_runs_only_after_full_resolution_quality_search_fails(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "output.pdf"
     full_min_quality = tmp_path / "full-q70.pdf"
@@ -148,12 +144,8 @@ def test_downsampling_runs_only_after_full_resolution_quality_search_fails(
     assert result.selected_quality is not None and result.selected_quality >= 70
     assert result.output_size_bytes is not None and result.output_size_bytes <= target
     assert any(attempt.scale < 1.0 for attempt in result.attempts)
-    first_downsample_index = next(
-        i for i, attempt in enumerate(result.attempts) if attempt.scale < 1.0
-    )
-    assert all(
-        attempt.scale == 1.0 for attempt in result.attempts[:first_downsample_index]
-    )
+    first_downsample_index = next(i for i, attempt in enumerate(result.attempts) if attempt.scale < 1.0)
+    assert all(attempt.scale == 1.0 for attempt in result.attempts[:first_downsample_index])
     assert output.exists()
     assert _sha256(source) == before_hash
 
@@ -221,9 +213,7 @@ def test_downsampling_allows_proven_fully_opaque_soft_mask(tmp_path: Path) -> No
     assert output_ref.get_object().get("/SMask") is None
 
 
-def test_downsampling_allows_opaque_smask_after_writer_renumbers_image_ref(
-    tmp_path: Path,
-) -> None:
+def test_downsampling_allows_opaque_smask_after_writer_renumbers_image_ref(tmp_path: Path) -> None:
     transparent = tmp_path / "transparent.pdf"
     opaque_smask = tmp_path / "opaque-smask.pdf"
     source = tmp_path / "renumbered-source.pdf"
@@ -261,9 +251,7 @@ def test_downsampling_allows_opaque_smask_after_writer_renumbers_image_ref(
     assert output_ref.get_object().get("/SMask") is None
 
 
-def test_downsampling_rejects_soft_mask_with_one_nonopaque_sample(
-    tmp_path: Path,
-) -> None:
+def test_downsampling_rejects_soft_mask_with_one_nonopaque_sample(tmp_path: Path) -> None:
     transparent = tmp_path / "transparent.pdf"
     source = tmp_path / "one-nonopaque-sample.pdf"
     output = tmp_path / "should-not-exist.pdf"
@@ -279,9 +267,7 @@ def test_downsampling_rejects_soft_mask_with_one_nonopaque_sample(
     )
 
     assert result.status is ImageFitStatus.UNSUPPORTED_IMAGE
-    assert any(
-        "non-redundant or unproven /SMask" in reason for reason in result.reasons
-    )
+    assert any("non-redundant or unproven /SMask" in reason for reason in result.reasons)
     assert not output.exists()
 
 
@@ -303,9 +289,7 @@ def test_downsampling_rejects_fully_opaque_soft_mask_with_optional_content(
     )
 
     assert result.status is ImageFitStatus.UNSUPPORTED_IMAGE
-    assert any(
-        "non-redundant or unproven /SMask" in reason for reason in result.reasons
-    )
+    assert any("non-redundant or unproven /SMask" in reason for reason in result.reasons)
     assert not output.exists()
 
 
@@ -331,9 +315,7 @@ def test_downsampling_rejects_fully_opaque_soft_mask_with_unknown_key(
     )
 
     assert result.status is ImageFitStatus.UNSUPPORTED_IMAGE
-    assert any(
-        "non-redundant or unproven /SMask" in reason for reason in result.reasons
-    )
+    assert any("non-redundant or unproven /SMask" in reason for reason in result.reasons)
     assert not output.exists()
 
 
@@ -356,9 +338,7 @@ def test_target_not_met_remains_fail_closed_at_minimum_scale(tmp_path: Path) -> 
     assert not output.exists()
 
 
-def test_subpercent_minimum_scale_is_not_rounded_below_the_floor(
-    tmp_path: Path,
-) -> None:
+def test_subpercent_minimum_scale_is_not_rounded_below_the_floor(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "should-not-exist.pdf"
     generate_image_heavy(source, pages=1, image_size=300)

@@ -59,11 +59,7 @@ def main() -> int:
         for reason in result.reasons:
             print(f"- {reason}")
 
-    return (
-        0
-        if result.status in {ImageFitStatus.FITTED, ImageFitStatus.ALREADY_BELOW_TARGET}
-        else 2
-    )
+    return 0 if result.status in {ImageFitStatus.FITTED, ImageFitStatus.ALREADY_BELOW_TARGET} else 2
 
 
 if __name__ == "__main__":

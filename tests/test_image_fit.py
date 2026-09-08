@@ -5,13 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import (
-    ArrayObject,
-    BooleanObject,
-    DictionaryObject,
-    NameObject,
-    NumberObject,
-)
+from pypdf.generic import ArrayObject, BooleanObject, DictionaryObject, NameObject, NumberObject
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -44,9 +38,7 @@ def _generate_transparent_image_pdf(path: Path, size: int = 200) -> None:
     c.save()
 
 
-def test_fit_image_heavy_pdf_finds_highest_quality_in_refinement(
-    tmp_path: Path,
-) -> None:
+def test_fit_image_heavy_pdf_finds_highest_quality_in_refinement(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "output.pdf"
     generate_image_heavy(source, pages=1, image_size=200)
@@ -179,9 +171,7 @@ def test_fit_preserves_shared_form_image_reference(tmp_path: Path) -> None:
     c.save()
 
     source_reader = PdfReader(str(source))
-    source_refs = [
-        page.images[0].indirect_reference.idnum for page in source_reader.pages
-    ]
+    source_refs = [page.images[0].indirect_reference.idnum for page in source_reader.pages]
     assert source_refs[0] == source_refs[1]
 
     result = fit_image_heavy_pdf(source, output, target_bytes=140_000, min_quality=70)
@@ -189,9 +179,7 @@ def test_fit_preserves_shared_form_image_reference(tmp_path: Path) -> None:
     assert result.status is ImageFitStatus.FITTED
     assert result.images_replaced == 1
     output_reader = PdfReader(str(output))
-    output_refs = [
-        page.images[0].indirect_reference.idnum for page in output_reader.pages
-    ]
+    output_refs = [page.images[0].indirect_reference.idnum for page in output_reader.pages]
     assert output_refs[0] == output_refs[1]
     assert all(len(page.images.keys()[0]) == 2 for page in output_reader.pages)
 
@@ -230,7 +218,7 @@ def test_fit_refuses_pdfa_identification_metadata(tmp_path: Path) -> None:
     generate_image_heavy(base, pages=1, image_size=250)
 
     writer = PdfWriter(clone_from=str(base))
-    writer.xmp_metadata = b"""<?xpacket begin=""?>
+    writer.xmp_metadata = b'''<?xpacket begin=""?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
     <rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
@@ -239,7 +227,7 @@ def test_fit_refuses_pdfa_identification_metadata(tmp_path: Path) -> None:
     </rdf:Description>
   </rdf:RDF>
 </x:xmpmeta>
-<?xpacket end="w"?>"""
+<?xpacket end="w"?>'''
     with source.open("wb") as f:
         writer.write(f)
 

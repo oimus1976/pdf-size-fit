@@ -53,19 +53,13 @@ def main() -> int:
         if result.output_size_bytes is not None:
             print(f"output: {result.output_size_bytes} bytes")
         print(f"route: {result.route}")
-        print(
-            f"rasterization: {result.dpi} dpi, {result.bits_per_pixel}-bit, {result.compression}"
-        )
+        print(f"rasterization: {result.dpi} dpi, {result.bits_per_pixel}-bit, {result.compression}")
         print(f"pages: {result.page_count}")
         print("reasons:")
         for reason in result.reasons:
             print(f"- {reason}")
 
-    return (
-        0
-        if result.status in {MonochromeFitStatus.FITTED, MonochromeFitStatus.SKIP}
-        else 2
-    )
+    return 0 if result.status in {MonochromeFitStatus.FITTED, MonochromeFitStatus.SKIP} else 2
 
 
 if __name__ == "__main__":

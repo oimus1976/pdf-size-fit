@@ -189,19 +189,11 @@ def diagnose_pdf(
 
     if file_size <= target_bytes:
         return Diagnosis(
-            path=str(path),
-            file_size_bytes=file_size,
-            target_bytes=target_bytes,
-            page_count=page_count,
-            image_stream_bytes=0,
-            vector_stream_bytes=0,
-            image_ratio=0.0,
-            vector_ratio=0.0,
-            rendered_color_fraction=None,
+            path=str(path), file_size_bytes=file_size, target_bytes=target_bytes,
+            page_count=page_count, image_stream_bytes=0, vector_stream_bytes=0,
+            image_ratio=0.0, vector_ratio=0.0, rendered_color_fraction=None,
             route=Route.SKIP,
-            reasons=(
-                f"file size {file_size} bytes is already at or below target {target_bytes} bytes",
-            ),
+            reasons=(f"file size {file_size} bytes is already at or below target {target_bytes} bytes",),
         )
 
     seen: set[tuple[Any, ...]] = set()
@@ -225,15 +217,9 @@ def diagnose_pdf(
 
     if image_ratio >= image_heavy_ratio:
         return Diagnosis(
-            path=str(path),
-            file_size_bytes=file_size,
-            target_bytes=target_bytes,
-            page_count=page_count,
-            image_stream_bytes=image_bytes,
-            vector_stream_bytes=vector_bytes,
-            image_ratio=image_ratio,
-            vector_ratio=vector_ratio,
-            rendered_color_fraction=None,
+            path=str(path), file_size_bytes=file_size, target_bytes=target_bytes,
+            page_count=page_count, image_stream_bytes=image_bytes, vector_stream_bytes=vector_bytes,
+            image_ratio=image_ratio, vector_ratio=vector_ratio, rendered_color_fraction=None,
             route=Route.IMAGE_HEAVY,
             reasons=(
                 f"encoded image streams account for about {image_ratio:.1%} of the PDF file size",
@@ -257,15 +243,9 @@ def diagnose_pdf(
             )
 
         return Diagnosis(
-            path=str(path),
-            file_size_bytes=file_size,
-            target_bytes=target_bytes,
-            page_count=page_count,
-            image_stream_bytes=image_bytes,
-            vector_stream_bytes=vector_bytes,
-            image_ratio=image_ratio,
-            vector_ratio=vector_ratio,
-            rendered_color_fraction=color_fraction,
+            path=str(path), file_size_bytes=file_size, target_bytes=target_bytes,
+            page_count=page_count, image_stream_bytes=image_bytes, vector_stream_bytes=vector_bytes,
+            image_ratio=image_ratio, vector_ratio=vector_ratio, rendered_color_fraction=color_fraction,
             route=route,
             reasons=(
                 f"page/form content streams account for about {vector_ratio:.1%} of the PDF file size",
@@ -275,15 +255,9 @@ def diagnose_pdf(
         )
 
     return Diagnosis(
-        path=str(path),
-        file_size_bytes=file_size,
-        target_bytes=target_bytes,
-        page_count=page_count,
-        image_stream_bytes=image_bytes,
-        vector_stream_bytes=vector_bytes,
-        image_ratio=image_ratio,
-        vector_ratio=vector_ratio,
-        rendered_color_fraction=None,
+        path=str(path), file_size_bytes=file_size, target_bytes=target_bytes,
+        page_count=page_count, image_stream_bytes=image_bytes, vector_stream_bytes=vector_bytes,
+        image_ratio=image_ratio, vector_ratio=vector_ratio, rendered_color_fraction=None,
         route=Route.UNCLASSIFIED,
         reasons=(
             "no size contributor crossed the current routing thresholds",
