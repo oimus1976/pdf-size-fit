@@ -64,10 +64,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         for reason in result.reasons:
             print(f"- {reason}")
 
-    return 0 if result.status in {
-        FitStatus.FITTED,
-        FitStatus.ALREADY_BELOW_TARGET,
-    } else 2
+    return (
+        0
+        if result.status
+        in {
+            FitStatus.FITTED,
+            FitStatus.ALREADY_BELOW_TARGET,
+        }
+        else 2
+    )
 
 
 if __name__ == "__main__":

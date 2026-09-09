@@ -1053,3 +1053,18 @@ def test_fit_refuses_different_cropbox(tmp_path: Path) -> None:
     assert result.status is ColorFitStatus.UNSUPPORTED_DOCUMENT
     assert "CropBox" in result.reasons[0]
     assert not output.exists()
+
+
+def test_result_helper_without_explicit_jpeg_quality_has_none_default():
+    from pdf_size_fit.color_fit import _result, ColorFitStatus
+    from pathlib import Path
+
+    res = _result(
+        ColorFitStatus.SKIP,
+        Path("input.pdf"),
+        input_size=10,
+        target_bytes=5,
+        page_count=1,
+        reasons=(),
+    )
+    assert res.jpeg_quality is None

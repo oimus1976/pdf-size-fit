@@ -85,7 +85,7 @@ class ColorFitResult:
     page_count: int
     reasons: tuple[str, ...]
     dpi: int | None = None
-    jpeg_quality: int | None = (None,)
+    jpeg_quality: int | None = None
     searchable_text_semantics_lost: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
