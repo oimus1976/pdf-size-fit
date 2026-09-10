@@ -36,9 +36,16 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedSourceCommit))
 $SourceCommit = $resolvedSourceCommit
 $shortSourceCommit = $SourceCommit.Substring(0, [Math]::Min(7, $SourceCommit.Length))
 
-& git diff --quiet $SourceCommit -- src pyproject.toml
+$sourceInputs = @(
+    "src",
+    "pyproject.toml",
+    "packaging/windows",
+    "THIRD_PARTY_NOTICES.txt",
+    "licenses"
+)
+& git diff --quiet $SourceCommit -- @sourceInputs
 if ($LASTEXITCODE -ne 0) {
-    throw "Application source differs from the requested source commit."
+    throw "Build inputs differ from the requested source commit."
 }
 
 $buildVenv = Join-Path $repoRoot ".portable-build-venv"
@@ -48,6 +55,18 @@ if (-not (Test-Path -LiteralPath $buildVenv)) {
     }
 }
 $buildPython = Join-Path $buildVenv "Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $buildPython)) {
+    throw "Portable build Python is missing: $buildPython"
+}
+
+$pythonIdentity = (& $buildPython -c "import platform, struct, sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}|{struct.calcsize(chr(80))*8}|{platform.machine()}')").Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to identify portable build Python."
+}
+if ($pythonIdentity -ne "3.12.10|64|AMD64") {
+    throw "Portable build requires CPython 3.12.10 x64; found $pythonIdentity"
+}
+
 Invoke-NativeChecked -FailureMessage "Failed to install pinned pip" -Command {
     & $buildPython -m pip install --upgrade pip==26.2.1
 }
