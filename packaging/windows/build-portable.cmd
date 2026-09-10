@@ -18,12 +18,26 @@ if not exist "%PYTHON_EXE%" (
 )
 
 for /f %%I in ('powershell.exe -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "STAMP=%%I"
+if "%STAMP%"=="" (
+  echo ERROR: Unable to create build timestamp.
+  exit /b 3
+)
+
 set "LOG_DIR=%REPO_ROOT%\logs\verification"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
+if not exist "%LOG_DIR%" (
+  echo ERROR: Unable to create log directory: %LOG_DIR%
+  exit /b 3
+)
+
 set "LOG=%LOG_DIR%\issue-13-final-portable-build-%STAMP%.log"
 set "BUILD_LOG=%LOG%"
 
 >"%LOG%" echo PDF Size Fit portable build
+if errorlevel 1 (
+  echo ERROR: Unable to initialize log file: %LOG%
+  exit /b 3
+)
 >>"%LOG%" echo Launcher: packaging\windows\build-portable.cmd
 >>"%LOG%" echo Python: %PYTHON_EXE%
 if not "%SOURCE_COMMIT%"=="" >>"%LOG%" echo Requested source commit: %SOURCE_COMMIT%
@@ -49,8 +63,21 @@ if not "%RC%"=="0" (
   exit /b %RC%
 )
 
+findstr /B /C:"Source commit:" "%LOG%" >nul || goto :missing_summary
+findstr /B /C:"Artifact:" "%LOG%" >nul || goto :missing_summary
+findstr /B /C:"Bytes:" "%LOG%" >nul || goto :missing_summary
+findstr /B /C:"SHA256:" "%LOG%" >nul || goto :missing_summary
+
 echo.
 echo BUILD SUCCEEDED
 findstr /B /C:"Source commit:" /C:"Artifact:" /C:"Bytes:" /C:"SHA256:" "%LOG%"
 echo Log: %LOG%
 exit /b 0
+
+:missing_summary
+echo.
+echo BUILD FAILED ^(missing success summary^)
+echo Log: %LOG%
+echo --- last 30 log lines ---
+powershell.exe -NoProfile -Command "Get-Content -LiteralPath $env:BUILD_LOG -Tail 30"
+exit /b 4
