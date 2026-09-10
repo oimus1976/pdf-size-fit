@@ -6,6 +6,11 @@ Stage 2 was executed on 2026-09-01 on the NucBox9 (Windows 11 Pro,
 
 ## Reproducible build inputs
 
+Run the supported operator launcher from a normal, non-elevated PowerShell or
+Command Prompt. PyInstaller 6.22.2 warns when run elevated, and future
+PyInstaller releases may reject administrator execution. Do not use an
+administrator shell for the supported build path.
+
 Use the supported operator launcher rather than invoking the PowerShell script
 directly:
 
