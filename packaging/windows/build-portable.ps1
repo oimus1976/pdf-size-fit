@@ -1,17 +1,27 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$PythonExe,
-    [string]$SourceCommit = "1242df81e2a3bc6b0b00ddd9ef19595cb3fb548a"
+    [string]$SourceCommit = ""
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $repoRoot
 
-& git cat-file -e "$SourceCommit^{commit}"
-if ($LASTEXITCODE -ne 0) {
+if ([string]::IsNullOrWhiteSpace($SourceCommit)) {
+    $SourceCommit = (& git rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($SourceCommit)) {
+        throw "Unable to resolve the current HEAD as the source commit."
+    }
+}
+
+$resolvedSourceCommit = (& git rev-parse "$SourceCommit^{commit}").Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedSourceCommit)) {
     throw "Source commit is not available: $SourceCommit"
 }
+$SourceCommit = $resolvedSourceCommit
+$shortSourceCommit = $SourceCommit.Substring(0, [Math]::Min(7, $SourceCommit.Length))
+
 & git diff --quiet $SourceCommit -- src pyproject.toml
 if ($LASTEXITCODE -ne 0) {
     throw "Application source differs from the requested source commit."
@@ -63,9 +73,10 @@ $inventory += "TkDND data: _internal\tkinterdnd2\tkdnd\win-x64"
 $inventory += "Python bytecode library: _internal\base_library.zip"
 $inventory | Set-Content -LiteralPath $inventoryPath -Encoding utf8
 
-$zipPath = Join-Path $repoRoot "dist\pdf-size-fit-win-x64-source-1242df8.zip"
+$zipPath = Join-Path $repoRoot "dist\pdf-size-fit-win-x64-source-$shortSourceCommit.zip"
 Compress-Archive -LiteralPath $artifactDir -DestinationPath $zipPath -CompressionLevel Optimal -Force
 $zipHash = Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath
+Write-Output "Source commit: $SourceCommit"
 Write-Output "Artifact: $zipPath"
 Write-Output "Bytes: $((Get-Item -LiteralPath $zipPath).Length)"
 Write-Output "SHA256: $($zipHash.Hash)"
