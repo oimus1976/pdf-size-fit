@@ -20,23 +20,23 @@ def _sha256(path: Path) -> str:
 
 
 def test_standard_probe_sets_are_small_ordered_and_floor_aware() -> None:
-    assert _quality_probes(70) == (90, 75, 70)
-    assert _quality_probes(80) == (90, 80)
-    assert _quality_probes(95) == (95,)
+    assert _quality_probes(70) == (100, 90, 75, 70)
+    assert _quality_probes(80) == (100, 90, 80)
+    assert _quality_probes(95) == (100, 95)
 
     assert _scale_probes(1.0) == ()
     assert _scale_probes(0.83) == (90, 83)
     assert _scale_probes(0.50) == (90, 80, 70, 60, 50)
 
 
-def test_first_fit_stops_at_first_full_resolution_candidate(tmp_path: Path) -> None:
+def test_first_fit_stops_at_quality_100_when_it_already_fits(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
-    probe = tmp_path / "probe-q90.pdf"
+    probe = tmp_path / "probe-q100.pdf"
     output = tmp_path / "output.pdf"
     generate_image_heavy(source, pages=1, image_size=300)
     before_hash = _sha256(source)
 
-    _build_candidate(source, probe, quality=90, scale=1.0)
+    _build_candidate(source, probe, quality=100, scale=1.0)
     target = probe.stat().st_size
     assert source.stat().st_size > target
 
@@ -49,10 +49,10 @@ def test_first_fit_stops_at_first_full_resolution_candidate(tmp_path: Path) -> N
     )
 
     assert result.status is ImageFitStatus.FITTED
-    assert result.selected_quality == 90
+    assert result.selected_quality == 100
     assert result.selected_scale == 1.0
     assert [(attempt.scale, attempt.quality) for attempt in result.attempts] == [
-        (1.0, 90)
+        (1.0, 100)
     ]
     assert result.output_size_bytes is not None and result.output_size_bytes <= target
     assert output.exists()
@@ -88,6 +88,7 @@ def test_first_fit_uses_bounded_scale_probes_after_quality_exhaustion(
     assert result.selected_quality == 70
     assert result.selected_scale == 0.90
     assert [(attempt.scale, attempt.quality) for attempt in result.attempts] == [
+        (1.0, 100),
         (1.0, 90),
         (1.0, 75),
         (1.0, 70),
