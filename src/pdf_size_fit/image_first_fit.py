@@ -24,7 +24,7 @@ from .image_fit import (
 # Standard mode deliberately uses a small probe set. The exact values are
 # policy knobs that can be tuned from representative local benchmarks without
 # changing the first-fit rule itself.
-FIRST_FIT_QUALITY_PROBES = (90, 75, 70)
+FIRST_FIT_QUALITY_PROBES = (100, 90, 75, 70)
 FIRST_FIT_SCALE_PROBES_PERCENT = (90, 80, 70, 60, 50)
 
 
@@ -150,7 +150,6 @@ def fit_image_heavy_pdf_first_fit(
     attempts: list[ImageFitAttempt] = []
     selected_candidate: Path | None = None
     selected_quality: int | None = None
-    selected_size: int | None = None
     selected_replaced = 0
     selected_scale: float | None = None
     removable_opaque_smask_refs: frozenset[tuple[int, int]] = frozenset()
@@ -182,7 +181,6 @@ def fit_image_heavy_pdf_first_fit(
                     if size <= target_bytes:
                         selected_candidate = candidate
                         selected_quality = quality
-                        selected_size = size
                         selected_replaced = replaced
                         selected_scale = 1.0
                         break
@@ -213,7 +211,6 @@ def fit_image_heavy_pdf_first_fit(
                         if size <= target_bytes:
                             selected_candidate = candidate
                             selected_quality = min_quality
-                            selected_size = size
                             selected_replaced = replaced
                             selected_scale = scale_percent / 100.0
                             break
@@ -238,7 +235,6 @@ def fit_image_heavy_pdf_first_fit(
             if (
                 selected_candidate is None
                 or selected_quality is None
-                or selected_size is None
                 or selected_scale is None
             ):
                 return ImageFitResult(
