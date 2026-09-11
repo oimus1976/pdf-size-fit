@@ -63,18 +63,22 @@ def test_first_fit_uses_bounded_scale_probes_after_quality_exhaustion(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "source.pdf"
-    full_q70 = tmp_path / "full-q70.pdf"
-    scale90_q70 = tmp_path / "scale90-q70.pdf"
     output = tmp_path / "output.pdf"
     generate_image_heavy(source, pages=1, image_size=300)
     before_hash = _sha256(source)
 
-    _build_candidate(source, full_q70, quality=70, scale=1.0)
+    full_sizes: list[int] = []
+    for quality in (100, 90, 75, 70):
+        candidate = tmp_path / f"full-q{quality}.pdf"
+        _build_candidate(source, candidate, quality=quality, scale=1.0)
+        full_sizes.append(candidate.stat().st_size)
+
+    scale90_q70 = tmp_path / "scale90-q70.pdf"
     _build_candidate(source, scale90_q70, quality=70, scale=0.90)
-    full_size = full_q70.stat().st_size
     scale90_size = scale90_q70.stat().st_size
-    assert scale90_size < full_size
-    target = (full_size + scale90_size) // 2
+    smallest_full_size = min(full_sizes)
+    assert scale90_size < smallest_full_size
+    target = (smallest_full_size + scale90_size) // 2
 
     result = fit_image_heavy_pdf_first_fit(
         source,
