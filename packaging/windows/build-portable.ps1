@@ -8,6 +8,20 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $repoRoot
 
+function Invoke-NativeChecked {
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Command,
+        [Parameter(Mandatory = $true)]
+        [string]$FailureMessage
+    )
+
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "$FailureMessage (exit=$LASTEXITCODE)"
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($SourceCommit)) {
     $SourceCommit = (& git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($SourceCommit)) {
@@ -22,20 +36,48 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedSourceCommit))
 $SourceCommit = $resolvedSourceCommit
 $shortSourceCommit = $SourceCommit.Substring(0, [Math]::Min(7, $SourceCommit.Length))
 
-& git diff --quiet $SourceCommit -- src pyproject.toml
+$sourceInputs = @(
+    "src",
+    "pyproject.toml",
+    "packaging/windows",
+    "THIRD_PARTY_NOTICES.txt",
+    "licenses"
+)
+& git diff --quiet $SourceCommit -- @sourceInputs
 if ($LASTEXITCODE -ne 0) {
-    throw "Application source differs from the requested source commit."
+    throw "Build inputs differ from the requested source commit."
 }
 
 $buildVenv = Join-Path $repoRoot ".portable-build-venv"
 if (-not (Test-Path -LiteralPath $buildVenv)) {
-    & $PythonExe -m venv $buildVenv
+    Invoke-NativeChecked -FailureMessage "Failed to create portable build virtual environment" -Command {
+        & $PythonExe -m venv $buildVenv
+    }
 }
 $buildPython = Join-Path $buildVenv "Scripts\python.exe"
-& $buildPython -m pip install --upgrade pip==26.2.1
-& $buildPython -m pip install -r packaging\windows\requirements-portable-build.txt
+if (-not (Test-Path -LiteralPath $buildPython)) {
+    throw "Portable build Python is missing: $buildPython"
+}
 
-& (Join-Path $buildVenv "Scripts\pyinstaller.exe") --noconfirm --clean packaging\windows\pdf-size-fit.spec
+$pythonIdentity = (& $buildPython -c "import platform, struct, sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}|{struct.calcsize(chr(80))*8}|{platform.machine()}')").Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to identify portable build Python."
+}
+if ($pythonIdentity -ne "3.12.10|64|AMD64") {
+    throw "Portable build requires CPython 3.12.10 x64; found $pythonIdentity"
+}
+
+Invoke-NativeChecked -FailureMessage "Failed to install pinned pip" -Command {
+    & $buildPython -m pip install --upgrade pip==26.2.1
+}
+Invoke-NativeChecked -FailureMessage "Failed to install pinned portable build requirements" -Command {
+    & $buildPython -m pip install -r packaging\windows\requirements-portable-build.txt
+}
+
+$pyinstaller = Join-Path $buildVenv "Scripts\pyinstaller.exe"
+Invoke-NativeChecked -FailureMessage "PyInstaller build failed" -Command {
+    & $pyinstaller --noconfirm --clean packaging\windows\pdf-size-fit.spec
+}
 
 $artifactDir = Join-Path $repoRoot "dist\pdf-size-fit"
 if (-not (Test-Path -LiteralPath (Join-Path $artifactDir "pdf-size-fit.exe"))) {
@@ -53,6 +95,7 @@ $inventory = @(
     "Source commit: $SourceCommit"
     "Build OS: $([System.Environment]::OSVersion.VersionString)"
     "Architecture: $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
+    "PowerShell: $($PSVersionTable.PSVersion)"
     "Packager: PyInstaller 6.22.2 onedir"
     "Python runtime: CPython 3.12.10 x64"
     "Tcl/Tk runtime: 8.6.15"
@@ -61,8 +104,12 @@ $inventory = @(
     ""
     "Native/binary files (relative path | bytes | SHA-256 | file version):"
 )
+$artifactPrefix = $artifactDir.TrimEnd('\') + '\'
 foreach ($file in $nativeFiles) {
-    $relative = [System.IO.Path]::GetRelativePath($artifactDir, $file.FullName)
+    if (-not $file.FullName.StartsWith($artifactPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Inventory path escaped artifact directory: $($file.FullName)"
+    }
+    $relative = $file.FullName.Substring($artifactPrefix.Length)
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
     $version = $file.VersionInfo.FileVersion
     $inventory += "$relative | $($file.Length) | $hash | $version"

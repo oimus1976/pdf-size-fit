@@ -6,21 +6,48 @@ Stage 2 was executed on 2026-09-01 on the NucBox9 (Windows 11 Pro,
 
 ## Reproducible build inputs
 
-Run the build from a clean checkout whose `src/` and `pyproject.toml` match the
-source commit. The script checks this condition before packaging:
+Run the supported operator launcher from a normal, non-elevated PowerShell or
+Command Prompt. PyInstaller 6.22.2 warns when run elevated, and future
+PyInstaller releases may reject administrator execution. Do not use an
+administrator shell for the supported build path.
+
+Use the supported operator launcher rather than invoking the PowerShell script
+directly:
 
 ```powershell
-.\packaging\windows\build-portable.ps1 `
-  -PythonExe C:\path\to\Python312\python.exe
+.\packaging\windows\build-portable.cmd `
+  "C:\path\to\Python312\python.exe" `
+  "<exact-source-commit>"
 ```
+
+The `.cmd` launcher starts Windows PowerShell with `-NoProfile` and
+`-ExecutionPolicy Bypass` for that child process only; it does not change the
+machine execution policy. Detailed build output is written to
+`logs\verification\issue-13-final-portable-build-<timestamp>.log`. On success,
+the console shows only the resolved source commit, artifact path, byte count,
+SHA-256, and log path. On failure, it shows the durable log path and the final
+30 log lines.
+
+Before packaging, the build resolves the requested source reference to an exact
+commit and fails closed if the checkout differs from that commit for any
+artifact-defining tracked input under `src/`, `pyproject.toml`,
+`packaging/windows/`, `THIRD_PARTY_NOTICES.txt`, or `licenses/`. The build also
+verifies that the isolated build environment is CPython 3.12.10 x64 before it
+records that runtime identity in the artifact inventory.
 
 Runtime packages are pinned to `pypdf==5.9.0`, `pypdfium2==4.30.0`,
 `Pillow==12.3.0`, and `tkinterdnd2==0.6.2`. The packager is
 `PyInstaller==6.22.2` in `onedir` mode. Its pinned build-only closure is
 `altgraph==0.17.5`, `packaging==26.3`, `pefile==2024.8.26`,
 `pyinstaller-hooks-contrib==2026.7`, `pywin32-ctypes==0.2.3`, and
-`setuptools==84.0.0`. The isolated build used pip 26.2.1 and CPython 3.12.10
+`setuptools==84.0.0`. The isolated build uses pip 26.2.1 and CPython 3.12.10
 x64; neither the build nor runtime uses the repository `.venv`.
+
+The PowerShell implementation remains available as
+`packaging/windows/build-portable.ps1`, but the `.cmd` launcher is the supported
+operator entry point on Windows so execution-policy handling and durable logging
+are applied consistently. The script is compatible with Windows PowerShell 5.1
+and later for the supported build path.
 
 ## Stage 2 artifact
 
