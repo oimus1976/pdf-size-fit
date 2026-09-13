@@ -4,6 +4,9 @@
 # Synthetic, redistributable fixtures may be explicitly kept here.
 !tests/fixtures/*.pdf
 
+# Keep raw local verification/build logs out of source control.
+logs/verification/*.log
+
 .venv/
 venv/
 .stage2-build/
