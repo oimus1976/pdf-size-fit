@@ -8,7 +8,7 @@ The audit/control-plane issue is #23. Public-readiness changes must remain isola
 
 ## Audit evidence
 
-The reachable-ref audit was performed from a disposable mirror with GitHub pull-request head refs fetched in addition to ordinary branch refs.
+The reachable-ref audit was performed from a disposable mirror with GitHub pull-request refs fetched in addition to ordinary branch refs.
 
 At the audited snapshot:
 
@@ -19,15 +19,15 @@ At the audited snapshot:
 - Gitleaks 8.30.1 reported 0 findings from its reachable patch-history scan;
 - its 115 scanned-commit count was reconciled against 118 reachable commits by identifying three commits with no scannable ordinary patch hunk: one delete-only commit, one file addition for which Git produced no ordinary text patch, and one merge commit.
 
-The count reconciliation proves that the Gitleaks patch-history run did not silently miss ordinary patch-bearing commits. It does **not** by itself prove that every reachable blob was scanned, because a reachable blob can exist without an ordinary text patch. The known verification-log blob in that category has been inspected separately and no credential was found, but a blob-complete secret scan across every unique reachable blob is still required before the full secret-audit gate can be closed.
+A separate blob-complete audit then enumerated every unique reachable blob at exact PR #24 head `d0170e7807194ac3d4326d1ee2248fc593608395` while `main` remained at the audited snapshot. It covered 261 unique reachable blobs totaling 2,382,969 bytes. All 261 blobs could be decoded as text by the audit helper, no opaque binary blob remained, and a printable-string corpus was generated for 260 blobs. Gitleaks directory scans over the raw blob corpus, decoded corpus, and printable-string corpus each produced the empty JSON array `[]`, i.e. 0 findings. An initial helper summary incorrectly counted each empty array as one finding under Windows PowerShell 5.1; the already-produced reports were re-counted with null/array-aware logic and the counting defect was documented in Issue #23.
 
 Current audit status is therefore:
 
 - `PASS_GITLEAKS_REACHABLE_PATCH_HISTORY`;
 - `PASS_HISTORICAL_RISKY_PATH_EXTENSION_INVENTORY`;
-- `PENDING_BLOB_COMPLETE_SECRET_SCAN`.
+- `PASS_BLOB_COMPLETE_SECRET_SCAN`.
 
-A fresh inventory is also required immediately before publication because repository state may change after the audit.
+A fresh inventory is still required immediately before publication because repository state may change after the audit.
 
 ## Evidence hygiene for a public repository
 
@@ -91,12 +91,11 @@ No remediation PR should silently make those decisions.
 
 Before changing visibility:
 
-1. complete the blob-complete reachable-history secret scan and close any findings;
-2. complete and review the isolated public-readiness remediation PR;
-3. run exact-head local/CI validation and independent/adversarial review;
-4. resolve the application-license human gate;
-5. resolve or explicitly accept the remaining historical/publication-surface metadata findings;
-6. refresh the complete repository inventory and secret/path checks;
-7. obtain the human private-to-public approval;
-8. after publication, verify a real public hosted-CI run and configure/read back the intended `main` protection/ruleset and external-fork approval policy;
-9. record `PUBLISHED_VERIFIED` only after those post-publication checks succeed.
+1. complete and review the isolated public-readiness remediation PR;
+2. run exact-head local/CI validation and independent/adversarial review;
+3. resolve the application-license human gate;
+4. resolve or explicitly accept the remaining historical/publication-surface metadata findings;
+5. refresh the complete repository inventory and secret/path checks;
+6. obtain the human private-to-public approval;
+7. after publication, verify a real public hosted-CI run and configure/read back the intended `main` protection/ruleset and external-fork approval policy;
+8. record `PUBLISHED_VERIFIED` only after those post-publication checks succeed.
