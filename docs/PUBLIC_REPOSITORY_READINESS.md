@@ -8,7 +8,7 @@ The audit/control-plane issue is #23. Public-readiness changes must remain isola
 
 ## Audit evidence
 
-The full reachable-history audit was performed from a disposable mirror with GitHub pull-request head refs fetched in addition to ordinary branch refs.
+The reachable-ref audit was performed from a disposable mirror with GitHub pull-request head refs fetched in addition to ordinary branch refs.
 
 At the audited snapshot:
 
@@ -16,10 +16,18 @@ At the audited snapshot:
 - 14 branch heads, 0 tags, and 15 fetched pull-request refs were inventoried;
 - 118 unique commits were reachable from the fetched refs;
 - the audited risky-path extension set produced 0 historical candidates;
-- Gitleaks 8.30.1 reported 0 findings;
-- its 115 scanned-commit count was reconciled against 118 reachable commits by identifying three commits with no scannable ordinary patch hunk: one delete-only commit, one zero-line file-addition commit, and one merge commit.
+- Gitleaks 8.30.1 reported 0 findings from its reachable patch-history scan;
+- its 115 scanned-commit count was reconciled against 118 reachable commits by identifying three commits with no scannable ordinary patch hunk: one delete-only commit, one file addition for which Git produced no ordinary text patch, and one merge commit.
 
-This closes the reachable-history secret-scan accounting gate for the audited snapshot. A fresh inventory is still required immediately before publication because repository state may change after the audit.
+The count reconciliation proves that the Gitleaks patch-history run did not silently miss ordinary patch-bearing commits. It does **not** by itself prove that every reachable blob was scanned, because a reachable blob can exist without an ordinary text patch. The known verification-log blob in that category has been inspected separately and no credential was found, but a blob-complete secret scan across every unique reachable blob is still required before the full secret-audit gate can be closed.
+
+Current audit status is therefore:
+
+- `PASS_GITLEAKS_REACHABLE_PATCH_HISTORY`;
+- `PASS_HISTORICAL_RISKY_PATH_EXTENSION_INVENTORY`;
+- `PENDING_BLOB_COMPLETE_SECRET_SCAN`.
+
+A fresh inventory is also required immediately before publication because repository state may change after the audit.
 
 ## Evidence hygiene for a public repository
 
@@ -83,11 +91,12 @@ No remediation PR should silently make those decisions.
 
 Before changing visibility:
 
-1. complete and review the isolated public-readiness remediation PR;
-2. run exact-head local/CI validation and independent/adversarial review;
-3. resolve the application-license human gate;
-4. resolve or explicitly accept the remaining historical/publication-surface metadata findings;
-5. refresh the complete repository inventory and secret/path checks;
-6. obtain the human private-to-public approval;
-7. after publication, verify a real public hosted-CI run and configure/read back the intended `main` protection/ruleset and external-fork approval policy;
-8. record `PUBLISHED_VERIFIED` only after those post-publication checks succeed.
+1. complete the blob-complete reachable-history secret scan and close any findings;
+2. complete and review the isolated public-readiness remediation PR;
+3. run exact-head local/CI validation and independent/adversarial review;
+4. resolve the application-license human gate;
+5. resolve or explicitly accept the remaining historical/publication-surface metadata findings;
+6. refresh the complete repository inventory and secret/path checks;
+7. obtain the human private-to-public approval;
+8. after publication, verify a real public hosted-CI run and configure/read back the intended `main` protection/ruleset and external-fork approval policy;
+9. record `PUBLISHED_VERIFIED` only after those post-publication checks succeed.
