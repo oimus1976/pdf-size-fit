@@ -2,7 +2,7 @@
 
 Status: **Remediation in progress / publication not yet approved**
 
-This document records repository-specific boundaries for a possible future change from private to public. It does not authorize a visibility change, select an application license, approve a binary release, or rewrite repository history.
+This document records repository-specific boundaries for a possible future change from private to public. It does not authorize a visibility change, approve a binary release, or rewrite repository history.
 
 The audit/control-plane issue is #23. Public-readiness changes must remain isolated from unrelated feature work such as PR #22.
 
@@ -58,16 +58,13 @@ A public fork pull request is untrusted code. The test workflow therefore follow
 
 The repository setting controlling which external contributors require workflow approval is not encoded in the workflow. Before/when the repository becomes public, the conservative initial policy is to require approval for all external contributors unless the owner deliberately chooses a less restrictive policy.
 
-## Application license is a separate human gate
+## Application license
 
-Public visibility and an application open-source license are different decisions. At this stage no application license has been selected and no root `LICENSE` file is added by the public-readiness remediation.
+The owner selected the MIT License for the application source during the public-readiness review. The repository therefore includes a root `LICENSE` containing the standard MIT terms with `Copyright (c) 2026 oimus1976`.
 
-Before publication, the owner must deliberately choose one of these directions:
+This application license decision does not replace or override third-party license obligations. `THIRD_PARTY_NOTICES.txt`, `licenses/`, and artifact-specific license inventories remain separate evidence for bundled dependencies and binary redistribution.
 
-1. select an application license appropriate to the intended reuse/distribution model; or
-2. publish the repository without a general application reuse license, understanding that this is public source visibility rather than an ordinary open-source grant.
-
-The choice must be repository-specific. It must not be inherited automatically from another project.
+License gate status: `PASS_APPLICATION_LICENSE_SELECTED_MIT`.
 
 ## Source publication is not binary-release approval
 
@@ -87,15 +84,16 @@ For each category the owner must decide whether to:
 
 No remediation PR should silently make those decisions.
 
+Ready, merge, destructive history cleanup, existing discussion redaction, and the private-to-public visibility change remain human-final decisions.
+
 ## Publication sequence
 
 Before changing visibility:
 
 1. complete and review the isolated public-readiness remediation PR;
 2. run exact-head local/CI validation and independent/adversarial review;
-3. resolve the application-license human gate;
-4. resolve or explicitly accept the remaining historical/publication-surface metadata findings;
-5. refresh the complete repository inventory and secret/path checks;
-6. obtain the human private-to-public approval;
-7. after publication, verify a real public hosted-CI run and configure/read back the intended `main` protection/ruleset and external-fork approval policy;
-8. record `PUBLISHED_VERIFIED` only after those post-publication checks succeed.
+3. resolve or explicitly accept the remaining historical/publication-surface metadata findings;
+4. refresh the complete repository inventory and secret/path checks;
+5. obtain the human private-to-public approval;
+6. after publication, verify a real public hosted-CI run and configure/read back the intended `main` protection/ruleset and external-fork approval policy;
+7. record `PUBLISHED_VERIFIED` only after those post-publication checks succeed.
