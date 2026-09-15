@@ -44,8 +44,7 @@ Runtime packages are pinned to `pypdf==5.9.0`, `pypdfium2==4.30.0`,
 x64; neither the build nor runtime uses the repository `.venv`.
 
 The PowerShell implementation remains available as
-`packaging/windows/build-portable.ps1`, but the `.cmd` launcher is the supported
-operator entry point on Windows so execution-policy handling and durable logging
+`packaging/windows/build-portable.ps1`, but the `.cmd` launcher is the supported operator entry point on Windows so execution-policy handling and durable logging
 are applied consistently. The script is compatible with Windows PowerShell 5.1
 and later for the supported build path.
 

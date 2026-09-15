@@ -146,9 +146,15 @@ Before grayscale inspection, the safety gate separately renders every page at th
 
 Only synthetic fixtures are included in the regression suite. Private municipal PDFs remain outside the repository and are reserved for the separate real-file validation gate.
 
+## License
+
+The application source is licensed under the MIT License. See `LICENSE`.
+
+Third-party dependencies and bundled binary components retain their own licenses; see `THIRD_PARTY_NOTICES.txt`, `licenses/`, and the artifact-specific licensing notes in `docs/PORTABLE_BUILD.md`.
+
 ## Project stage
 
-This repository currently records experiments and design decisions. Backend libraries, license, packaging method, and release policy are **not yet finalized**. The Windows GUI is only a source-checkout usability MVP, not a packaged release.
+This repository currently records experiments and design decisions. Backend libraries, packaging method, and release policy are **not yet finalized**. The Windows GUI is only a source-checkout usability MVP, not a packaged release.
 
 Real municipal documents used during local testing must not be committed. Repository fixtures should be synthetic or otherwise safe to redistribute.
 
