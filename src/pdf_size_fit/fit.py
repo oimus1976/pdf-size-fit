@@ -12,7 +12,8 @@ from .color_fit import (
     ColorFitStatus,
     fit_color_vector_pdf,
 )
-from .image_fit import ImageFitResult, ImageFitStatus, fit_image_heavy_pdf
+from .image_fit import ImageFitResult, ImageFitStatus
+from .image_first_fit import fit_image_heavy_pdf_first_fit as fit_image_heavy_pdf
 from .monochrome_fit import (
     FIXED_DPI,
     MonochromeFitResult,
