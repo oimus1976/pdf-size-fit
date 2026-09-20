@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 
 from pypdf import PdfWriter
 from pypdf.generic import ArrayObject, DictionaryObject, NameObject
 
+from pdf_size_fit.diagnose import Route
 from pdf_size_fit.image_first_fit import (
     _quality_probes,
     _scale_probes,
@@ -29,7 +31,9 @@ def test_standard_probe_sets_are_small_ordered_and_floor_aware() -> None:
     assert _scale_probes(0.50) == (90, 80, 70, 60, 50)
 
 
-def test_first_fit_stops_at_quality_100_when_it_already_fits(tmp_path: Path) -> None:
+def test_first_fit_stops_at_quality_100_when_first_candidate_fits(
+    tmp_path: Path, monkeypatch
+) -> None:
     source = tmp_path / "source.pdf"
     probe = tmp_path / "probe-q100.pdf"
     output = tmp_path / "output.pdf"
@@ -37,8 +41,14 @@ def test_first_fit_stops_at_quality_100_when_it_already_fits(tmp_path: Path) -> 
     before_hash = _sha256(source)
 
     _build_candidate(source, probe, quality=100, scale=1.0)
-    target = probe.stat().st_size
-    assert source.stat().st_size > target
+
+    # Candidate byte size varies with the PDF/image stack. This unit test is
+    # specifically about first-fit ordering and stopping, not route diagnosis.
+    target = probe.stat().st_size + 1024
+    monkeypatch.setattr(
+        "pdf_size_fit.image_first_fit.diagnose_pdf",
+        lambda *_args, **_kwargs: SimpleNamespace(route=Route.IMAGE_HEAVY),
+    )
 
     result = fit_image_heavy_pdf_first_fit(
         source,
@@ -126,5 +136,38 @@ def test_first_fit_retains_signature_fail_closed_gate(tmp_path: Path) -> None:
     )
 
     assert result.status is ImageFitStatus.SIGNED_PDF_UNSUPPORTED
+    assert result.attempts == ()
+    assert not output.exists()
+
+
+def test_first_fit_retains_pdfa_fail_closed_gate(tmp_path: Path) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "pdfa-marked.pdf"
+    output = tmp_path / "should-not-exist.pdf"
+    generate_image_heavy(base, pages=1, image_size=250)
+
+    writer = PdfWriter(clone_from=str(base))
+    writer.xmp_metadata = b"""<?xpacket begin=""?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
+      <pdfaid:part>2</pdfaid:part>
+      <pdfaid:conformance>B</pdfaid:conformance>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>"""
+    with source.open("wb") as stream:
+        writer.write(stream)
+
+    result = fit_image_heavy_pdf_first_fit(
+        source,
+        output,
+        target_bytes=max(1, source.stat().st_size // 2),
+        min_quality=70,
+        min_scale=0.50,
+    )
+
+    assert result.status is ImageFitStatus.PDF_A_UNSUPPORTED
     assert result.attempts == ()
     assert not output.exists()
