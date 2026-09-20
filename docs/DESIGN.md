@@ -61,7 +61,9 @@ The encoded-stream measurement currently isolates one pypdf private implementati
 
 ## Route A: image-heavy PDFs
 
-Current PoC design:
+Issue #21 currently separates two search policies while keeping the same candidate-generation and fail-closed safety machinery. The integrated `fit_pdf` standard path uses a bounded stop-on-first-success probe sequence for lower latency. The route-specific `pdf-size-fit-image` path retains the existing refinement search described below as the reference implementation for a later explicit high-quality mode. Downsampling remains opt-in in both paths.
+
+Current route-specific/high-quality-reference design:
 
 1. Require the structural classifier to return `image-heavy`.
 2. Reject PDFs containing signature fields or certification-permissions structures before rewriting.

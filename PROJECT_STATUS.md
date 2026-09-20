@@ -1,20 +1,24 @@
 # Project Status
 
-Last updated: 2026-09-02
+Last updated: 2026-09-20
 
 ## Current phase
 
 **Experimental / PoC**
 
+The GitHub repository is public. The application source is licensed under the MIT License; bundled third-party components retain their respective licenses.
+
 The project is validating whether oversized PDFs can be automatically classified and fitted under a target attachment limit without forcing users to understand PDF internals or compression parameters.
 
 ## Integrated automatic fitting backend
 
-The backend now provides one `fit_pdf` API and one `pdf-size-fit` command that accept an input PDF, a separate output path, and a configurable byte target (default `10_000_000`). The integrated layer uses the existing diagnosis and automatically delegates `image-heavy`, `vector-monochrome`, and `vector-color` inputs to their existing fitters. It does not require callers to select a PDF-internal route.
+The backend provides one `fit_pdf` API and one `pdf-size-fit` command that accept an input PDF, a separate output path, and a configurable byte target (default `10_000_000`). The integrated layer uses the existing diagnosis and automatically dispatches supported `image-heavy`, `vector-monochrome`, and `vector-color` inputs without requiring callers to select a PDF-internal route.
 
-The integration is orchestration only. `skip` succeeds without creating output; `unclassified` remains unsupported and fails closed without creating output. Delegated refusals and target failures are normalized as non-success while retaining the route-specific status and result evidence.
+For `image-heavy`, the standard integrated path now uses a bounded first-fit policy: full-resolution JPEG quality probes `100 -> 90 -> 75 -> 70`, respecting any higher configured quality floor, and stopping after the first validated candidate that meets the target. Explicitly enabled downsampling uses a small bounded scale-probe set. The older route-specific `pdf-size-fit-image` fitter retains its refinement/best-fit search for the later explicit high-quality mode.
 
-Existing safety policy is unchanged: image minimum-quality behavior is preserved, image downsampling defaults off at `min_scale=1.0`, monochrome rendering remains fixed at 300 dpi, and small searchable-text rasterization remains explicit opt-in and off by default. The integration does not pre-create destinations, overwrite inputs or existing destinations, delete originals, add a compression route, or introduce a product-wide target safety margin.
+An explicit high-quality GUI mode, granular progress reporting, and page splitting are not implemented yet.
+
+`skip` succeeds without creating output; `unclassified` remains unsupported and fails closed without creating output. Delegated refusals and target failures are normalized as non-success while retaining route-specific evidence. Image downsampling still defaults off at `min_scale=1.0`, monochrome rendering remains fixed at 300 dpi, and small searchable-text rasterization remains explicit opt-in and off by default. The integration does not overwrite inputs or existing destinations, delete originals, or introduce a product-wide target safety margin.
 
 ## Windows simple drag-and-drop GUI
 
@@ -24,7 +28,7 @@ Simple mode fixes the boundary at exactly `10_000_000` bytes. Files at or below 
 
 Quality, image scale, route, and backend evidence are absent from the default view. The prior development controls remain behind `詳細設定`. Simple requests retain `min_quality=70`, `min_scale=1.0` (downsampling off), and `allow_small_searchable_text_rasterization=False`; no destructive opt-in is silently enabled. Processing remains on a worker thread and successful runs retain `フォルダーを開く`.
 
-Only an `image-heavy` `target-not-met` result from that exact initial simple request produces an explicit Japanese downsampling offer. Confirmation changes only the image scale floor to the reviewed `min_scale=0.50` and reruns the existing fitter; target 10,000,000 bytes, minimum JPEG quality 70, searchable-text rasterization off, exclusive output creation, and all structural and `/SMask` fail-closed checks remain authoritative. Ordinary success, the `<=10 MB` no-op, other routes/refusals, cancellation, and advanced-mode execution do not enter this retry path. Fallback success reports the selected scale and quality and warns about possible quality loss; fallback failure leaves no output.
+Only an `image-heavy` `target-not-met` result from that exact initial simple request produces an explicit Japanese downsampling offer. Confirmation changes only the image scale floor to the reviewed `min_scale=0.50` and reruns the same bounded standard first-fit strategy; target 10,000,000 bytes, minimum JPEG quality 70, searchable-text rasterization off, exclusive output creation, and all structural and `/SMask` fail-closed checks remain authoritative. Ordinary success, the `<=10 MB` no-op, other routes/refusals, cancellation, and advanced-mode execution do not enter this retry path. Fallback success reports the selected scale and quality and warns about possible quality loss; fallback failure leaves no output.
 
 Tkinter and Tk D&D integration are imported only at GUI startup. Headless tests cover the fixed boundary, no-op behavior, collision naming, immutable destinations, backend argument mapping, D&D parsing, shell/drop path convergence, and simple presentation without starting Tk or requiring a display. GitHub Actions runs the full suite on both Ubuntu and Windows for Python 3.11 and 3.12.
 
@@ -157,7 +161,6 @@ Remaining compatibility priorities include:
 ## Not decided yet
 
 - Final PDF writer library
-- Application license
 - Packaging / installer method
 - GUI framework
 - Exact safety margin below a nominal 10 MB limit

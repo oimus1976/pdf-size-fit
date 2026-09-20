@@ -68,6 +68,8 @@ The project is currently experimental and does not yet use formal releases.
 
 ### Changed
 
+- The integrated image-heavy `fit_pdf` path now uses a bounded standard first-fit search (`100 -> 90 -> 75 -> 70`, subject to the configured quality floor) and stops after the first validated candidate that meets the target. The route-specific `pdf-size-fit-image` fitter retains its existing refinement/best-fit behavior for the later explicit high-quality mode.
+
 - Color routing now scans every page at low resolution and uses the maximum per-page color fraction, reducing the risk of incorrectly classifying a partially color document as monochrome.
 - Raw-stream sizing falls back to pypdf stream serialization if private `_data` storage is unavailable instead of relying on parsed `/Length`.
 - The image-heavy route now preserves the original PDF object/page structure and replaces only supported image XObjects instead of reconstructing each page in a new PDF.
@@ -83,7 +85,7 @@ The project is currently experimental and does not yet use formal releases.
 - Fully opaque soft masks are now accepted as removable only when their image dictionaries contain a strict allowlist of known-safe keys; optional-content, metadata, and unknown semantics fail closed.
 - Original-retention requirements now explicitly prohibit automatic input deletion or replacement and avoid unsolicited backup copies; compression is an irreversible derivative whose retention handling belongs to the adopting organization's document-management rules.
 - Monochrome execution now requires the existing `vector-monochrome` diagnosis for the same target and rejects unsupported document semantics before diagnosis rendering.
-- Integrated fitting treats `skip` as a no-output success and fails closed for `vector-color` and `unclassified`; existing route-specific safety defaults and CLIs remain unchanged.
+- Integrated fitting treats `skip` as a no-output success, dispatches supported `vector-color` inputs, and fails closed for `unclassified`; existing route-specific safety defaults and CLIs remain unchanged.
 - Monochrome bilevel preflight now rejects a 3x3-persistent unsupported-midtone region whose centers lack bilateral near-black/near-white support in a 5x5 neighborhood at 300 dpi, instead of using the provisional 72-dpi raw-midtone percentage rule.
 - Searchable text remains refused by default; explicit opt-in requires both pypdf and PDFium independently to stay within 8 non-whitespace characters and one non-empty line per page and 256 non-whitespace characters per document and to agree exactly on normalized page metrics, with accepted results recording loss of selectable/searchable and search/copy semantics.
 - Monochrome structural preflight now walks the raw `/Pages` tree before flattened pages are trusted, rejecting unknown node/leaf semantics, malformed types/counts/parent links, identity uncertainty, repeated nodes/cycles/duplicate leaves, and raw-to-flattened order disagreement.
@@ -93,7 +95,7 @@ The project is currently experimental and does not yet use formal releases.
 
 ### Notes
 
-- No application license has been selected yet.
+- The application source is licensed under the MIT License; bundled third-party components retain their respective licenses.
 - No production compression engine, installer, or release artifact exists yet; the GUI remains a source-checkout Stage 1 implementation.
 - Real municipal source documents used for local validation are intentionally excluded from the repository.
 - Image replacement remains deliberately conservative: unsupported masks, color spaces, bit depths, decoding structures, unknown image dictionary semantics, signed/certified PDFs, or PDF/A-identified PDFs return a fail-closed result rather than being rewritten silently.
