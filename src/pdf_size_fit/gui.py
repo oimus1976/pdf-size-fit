@@ -5,7 +5,7 @@ import json
 import os
 import queue
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -16,9 +16,8 @@ from .fit import FitResult, FitStatus, fit_pdf
 
 SIMPLE_TARGET_BYTES = 10_000_000
 SIMPLE_MIN_QUALITY = 70
-SIMPLE_MIN_SCALE = 1.0
+SIMPLE_MIN_SCALE = 0.50
 SIMPLE_ALLOW_TEXT_RASTERIZATION = False
-DOWNSAMPLING_FALLBACK_MIN_SCALE = 0.50
 ALREADY_BELOW_MESSAGE = "このPDFはすでに10MB以下です。変換は不要です。"
 DEFAULT_TARGET_MB = "10"
 DEFAULT_MIN_QUALITY = "70"
@@ -189,55 +188,6 @@ def run_simple_request(
     return run_request(request, fitter=fitter)
 
 
-def is_simple_mode_request(request: GuiRequest) -> bool:
-    """Return whether a request exactly matches the simple-mode safety policy."""
-    return (
-        request.target_bytes == SIMPLE_TARGET_BYTES
-        and request.min_quality == SIMPLE_MIN_QUALITY
-        and request.min_scale == SIMPLE_MIN_SCALE
-        and request.allow_small_searchable_text_rasterization
-        is SIMPLE_ALLOW_TEXT_RASTERIZATION
-    )
-
-
-def should_offer_downsampling(request: GuiRequest, result: FitResult) -> bool:
-    """Gate the destructive fallback to the reviewed simple-mode outcome."""
-    return (
-        is_simple_mode_request(request)
-        and result.status is FitStatus.ROUTE_FAILED
-        and result.route is Route.IMAGE_HEAVY
-        and result.delegated_route_status == "target-not-met"
-        and result.output_path is None
-        and result.output_size_bytes is None
-    )
-
-
-def build_downsampling_fallback_request(
-    request: GuiRequest,
-    result: FitResult,
-) -> GuiRequest:
-    """Relax only the reviewed image scale floor after an eligible failure."""
-    if not should_offer_downsampling(request, result):
-        raise ValueError("この結果には画像縮小の再試行を提案できません。")
-    return replace(request, min_scale=DOWNSAMPLING_FALLBACK_MIN_SCALE)
-
-
-def run_downsampling_fallback_if_confirmed(
-    request: GuiRequest,
-    result: FitResult,
-    *,
-    confirmed: bool,
-    fitter: Callable[..., FitResult] = fit_pdf,
-) -> FitResult | None:
-    """Exercise the explicit fallback gate without requiring a GUI display."""
-    if not confirmed:
-        return None
-    return run_request(
-        build_downsampling_fallback_request(request, result),
-        fitter=fitter,
-    )
-
-
 def parse_drop_paths(
     data: str,
     splitlist: Callable[[str], Sequence[str]],
@@ -252,22 +202,21 @@ def _format_size(value: int | None) -> str:
     return f"{value / 1_000_000:.3f} MB ({value:,} bytes)"
 
 
-def present_simple_result(
-    result: FitResult,
-    *,
-    downsampling_fallback: bool = False,
-) -> ResultPresentation:
+def present_simple_result(result: FitResult) -> ResultPresentation:
     details = json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
     if result.status is FitStatus.FITTED:
         output_size = result.output_size_bytes or 0
         summary_lines = [f"同じフォルダーに作成しました。\n{result.output_path}"]
-        if downsampling_fallback:
-            route_result = result.route_result
-            selected_scale = getattr(route_result, "selected_scale", None)
-            selected_quality = getattr(route_result, "selected_quality", None)
+        route_result = result.route_result
+        selected_scale = getattr(route_result, "selected_scale", None)
+        selected_quality = getattr(route_result, "selected_quality", None)
+        if (
+            result.route is Route.IMAGE_HEAVY
+            and selected_scale is not None
+            and selected_scale < 1.0
+        ):
             summary_lines.append("画像を縮小して変換しました。画質が低下している場合があります。")
-            if selected_scale is not None:
-                summary_lines.append(f"画像スケール: {selected_scale:.0%}")
+            summary_lines.append(f"画像スケール: {selected_scale:.0%}")
             if selected_quality is not None:
                 summary_lines.append(f"JPEG 品質: {selected_quality}")
         return ResultPresentation(
@@ -297,11 +246,7 @@ def present_simple_result(
 
     delegated = result.delegated_route_status or "unknown"
     if delegated == "target-not-met":
-        title = (
-            "画像を縮小しても10MB以下にできませんでした。"
-            if downsampling_fallback
-            else "安全な設定の範囲では10MB以下にできませんでした。"
-        )
+        title = "10MB以下にできませんでした。"
         category = "target-not-met"
     else:
         title = "安全のため変換を中止しました。"
@@ -309,11 +254,7 @@ def present_simple_result(
     return ResultPresentation(
         category=category,
         title=title,
-        summary=(
-            "出力ファイルは作成していません。"
-            if downsampling_fallback
-            else "出力ファイルは作成していません。破壊的な設定は自動で有効にしていません。"
-        ),
+        summary="出力ファイルは作成していません。",
         details=details,
     )
 
@@ -413,7 +354,7 @@ class _Application:
         self.tk = tk
         self.ttk = ttk
         self.filedialog = filedialog
-        self.events: queue.Queue[tuple[str, Any, bool, bool, GuiRequest]] = queue.Queue()
+        self.events: queue.Queue[tuple[str, Any, bool]] = queue.Queue()
         self.busy = False
         self.successful_output: Path | None = None
         self.advanced_visible = False
@@ -606,7 +547,7 @@ class _Application:
             return
         self.input_var.set(str(request.input_path))
         self.output_var.set(str(request.output_path))
-        self._begin(request, simple=True, downsampling_fallback=False)
+        self._begin(request, simple=True)
 
     def _start_advanced(self) -> None:
         try:
@@ -620,14 +561,13 @@ class _Application:
         except Exception as error:
             self._show(present_error(error))
             return
-        self._begin(request, simple=False, downsampling_fallback=False)
+        self._begin(request, simple=False)
 
     def _begin(
         self,
         request: GuiRequest,
         *,
         simple: bool,
-        downsampling_fallback: bool,
     ) -> None:
         self.busy = True
         self.successful_output = None
@@ -643,7 +583,7 @@ class _Application:
         self.progress.start(12)
         threading.Thread(
             target=self._worker,
-            args=(request, simple, downsampling_fallback),
+            args=(request, simple),
             daemon=True,
         ).start()
         self.root.after(100, self._poll)
@@ -652,23 +592,16 @@ class _Application:
         self,
         request: GuiRequest,
         simple: bool,
-        downsampling_fallback: bool,
     ) -> None:
         try:
             result = run_simple_request(request) if simple else run_request(request)
-            self.events.put(
-                ("result", result, simple, downsampling_fallback, request)
-            )
+            self.events.put(("result", result, simple))
         except BaseException as error:
-            self.events.put(
-                ("error", error, simple, downsampling_fallback, request)
-            )
+            self.events.put(("error", error, simple))
 
     def _poll(self) -> None:
         try:
-            kind, value, simple, downsampling_fallback, request = (
-                self.events.get_nowait()
-            )
+            kind, value, simple = self.events.get_nowait()
         except queue.Empty:
             if self.busy:
                 self.root.after(100, self._poll)
@@ -678,72 +611,10 @@ class _Application:
         for control in self.simple_controls + self.advanced_controls:
             control.configure(state="normal")
         if kind == "result":
-            presentation = (
-                present_simple_result(
-                    value,
-                    downsampling_fallback=downsampling_fallback,
-                )
-                if simple
-                else present_result(value)
-            )
+            presentation = present_simple_result(value) if simple else present_result(value)
         else:
             presentation = present_error(value)
         self._show(presentation)
-        if (
-            kind == "result"
-            and simple
-            and not downsampling_fallback
-            and should_offer_downsampling(request, value)
-            and self._confirm_downsampling()
-        ):
-            fallback_request = build_downsampling_fallback_request(request, value)
-            self._begin(
-                fallback_request,
-                simple=True,
-                downsampling_fallback=True,
-            )
-
-    def _confirm_downsampling(self) -> bool:
-        """Show the one explicit opt-in offered after an eligible safe failure."""
-        dialog = self.tk.Toplevel(self.root)
-        dialog.title("画像縮小の確認")
-        dialog.transient(self.root)
-        dialog.resizable(False, False)
-        answer = {"accepted": False}
-
-        body = self.ttk.Frame(dialog, padding=18)
-        body.grid(sticky="nsew")
-        self.ttk.Label(
-            body,
-            text=(
-                "安全な設定では10MB以下にできませんでした。\n"
-                "画像を少し縮小して再試行しますか？\n"
-                "画質が低下する場合があります。"
-            ),
-            justify="left",
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 14))
-
-        def close(accepted: bool) -> None:
-            answer["accepted"] = accepted
-            dialog.destroy()
-
-        retry_button = self.ttk.Button(
-            body,
-            text="画像を縮小して再試行",
-            command=lambda: close(True),
-        )
-        retry_button.grid(row=1, column=0, padx=(0, 8))
-        self.ttk.Button(
-            body,
-            text="キャンセル",
-            command=lambda: close(False),
-        ).grid(row=1, column=1)
-        dialog.protocol("WM_DELETE_WINDOW", lambda: close(False))
-        dialog.grab_set()
-        retry_button.focus_set()
-        self.root.wait_window(dialog)
-        return answer["accepted"]
-
     def _show(self, presentation: ResultPresentation) -> None:
         self.status_var.set(f"{presentation.title}\n{presentation.summary}")
         self._set_details(presentation.details)
