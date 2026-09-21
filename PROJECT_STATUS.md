@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-09-20
+Last updated: 2026-09-21
 
 ## Current phase
 
@@ -18,7 +18,7 @@ For `image-heavy`, the standard integrated path now uses a bounded first-fit pol
 
 An explicit high-quality GUI mode, granular progress reporting, and page splitting are not implemented yet.
 
-`skip` succeeds without creating output; `unclassified` remains unsupported and fails closed without creating output. Delegated refusals and target failures are normalized as non-success while retaining route-specific evidence. Image downsampling still defaults off at `min_scale=1.0`, monochrome rendering remains fixed at 300 dpi, and small searchable-text rasterization remains explicit opt-in and off by default. The integration does not overwrite inputs or existing destinations, delete originals, or introduce a product-wide target safety margin.
+`skip` succeeds without creating output; `unclassified` remains unsupported and fails closed without creating output. Delegated refusals and target failures are normalized as non-success while retaining route-specific evidence. Direct integrated API/CLI calls still default image downsampling off at `min_scale=1.0`; the standard simple GUI intentionally supplies the reviewed `min_scale=0.50` floor. Monochrome rendering remains fixed at 300 dpi, and small searchable-text rasterization remains explicit opt-in and off by default. The integration does not overwrite inputs or existing destinations, delete originals, or introduce a product-wide target safety margin.
 
 ## Windows simple drag-and-drop GUI
 
@@ -26,9 +26,9 @@ The default source-checkout GUI is now a simple view centered on `PDFをここ�
 
 Simple mode fixes the boundary at exactly `10_000_000` bytes. Files at or below it return the Japanese no-conversion message without calling the fitting backend or creating output. Oversized inputs use a same-directory exclusive destination: `name-fit.pdf`, `name-fit-2.pdf`, and so on. The input and existing files are never overwritten or deleted.
 
-Quality, image scale, route, and backend evidence are absent from the default view. The prior development controls remain behind `詳細設定`. Simple requests retain `min_quality=70`, `min_scale=1.0` (downsampling off), and `allow_small_searchable_text_rasterization=False`; no destructive opt-in is silently enabled. Processing remains on a worker thread and successful runs retain `フォルダーを開く`.
+Quality, route, and backend evidence are absent from the default view. The prior development controls remain behind `詳細設定`. Simple requests retain `min_quality=70` and `allow_small_searchable_text_rasterization=False`, while using the reviewed `min_scale=0.50` floor for bounded automatic image downsampling after full-resolution probes fail. Processing remains on a worker thread and successful runs retain `フォルダーを開く`.
 
-Only an `image-heavy` `target-not-met` result from that exact initial simple request produces an explicit Japanese downsampling offer. Confirmation changes only the image scale floor to the reviewed `min_scale=0.50` and reruns the same bounded standard first-fit strategy; target 10,000,000 bytes, minimum JPEG quality 70, searchable-text rasterization off, exclusive output creation, and all structural and `/SMask` fail-closed checks remain authoritative. Ordinary success, the `<=10 MB` no-op, other routes/refusals, cancellation, and advanced-mode execution do not enter this retry path. Fallback success reports the selected scale and quality and warns about possible quality loss; fallback failure leaves no output.
+Simple mode now makes one backend request rather than an initial request plus a confirmation-driven retry. For image-heavy PDFs, the existing standard first-fit backend exhausts full-resolution quality probes before bounded scale probes down to the reviewed 50% floor. Target 10,000,000 bytes, minimum JPEG quality 70, searchable-text rasterization off, destination protection, and all structural and `/SMask` fail-closed checks remain authoritative. Successful scaled output reports the selected scale and quality with a quality-loss warning; bounded-search exhaustion leaves no output.
 
 Tkinter and Tk D&D integration are imported only at GUI startup. Headless tests cover the fixed boundary, no-op behavior, collision naming, immutable destinations, backend argument mapping, D&D parsing, shell/drop path convergence, and simple presentation without starting Tk or requiring a display. GitHub Actions runs the full suite on both Ubuntu and Windows for Python 3.11 and 3.12.
 

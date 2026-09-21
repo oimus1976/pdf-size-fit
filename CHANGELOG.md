@@ -63,8 +63,8 @@ The project is currently experimental and does not yet use formal releases.
 - Cross-platform GitHub Actions coverage on Ubuntu and Windows for Python 3.11 and 3.12; GUI workflow tests remain headless and display-independent.
 - Exact-pinned Windows x64 PyInstaller 6.22.2 onedir packaging, an isolated build script, artifact-level native/runtime inventory, collected license texts, and `THIRD_PARTY_NOTICES.txt`.
 - NucBox9 Stage 2 evidence for ZIP-only startup without Python on PATH, Explorer-equivalent shell input, `<=10 MB` no-op, collision-safe oversized synthetic compression, immutability, pypdf/PDFium reopen/render, and zero observed runtime TCP connections.
-- Explicit Japanese simple-mode offer to retry only an eligible `image-heavy` `target-not-met` result through the existing bounded downsampling search, with cancellation and no-output failure behavior.
-- Headless fallback-flow coverage for offer eligibility, exact option forwarding, cancellation, success evidence, and failure presentation.
+- Standard simple mode now uses one bounded request that may automatically downsample image-heavy content to the reviewed 50% scale floor after full-resolution probes fail.
+- Headless simple-flow coverage now locks the 50% request floor, one-call behavior, removal of the second downsampling retry API, scaled-success evidence, and no-output exhaustion behavior.
 
 ### Changed
 
@@ -90,8 +90,8 @@ The project is currently experimental and does not yet use formal releases.
 - Searchable text remains refused by default; explicit opt-in requires both pypdf and PDFium independently to stay within 8 non-whitespace characters and one non-empty line per page and 256 non-whitespace characters per document and to agree exactly on normalized page metrics, with accepted results recording loss of selectable/searchable and search/copy semantics.
 - Monochrome structural preflight now walks the raw `/Pages` tree before flattened pages are trusted, rejecting unknown node/leaf semantics, malformed types/counts/parent links, identity uncertainty, repeated nodes/cycles/duplicate leaves, and raw-to-flattened order disagreement.
 - Monochrome destructive safety now rejects any fixed-300-dpi RGB pixel with channel spread at least 16 before the separate grayscale/bilevel inspection; no area-percentage threshold is used, and candidate rendering remains `grayscale=True` then `.convert("1")`.
-- Simple mode now refuses to call the fitting backend for inputs at or below 10,000,000 bytes and never silently enables image downsampling or searchable-text rasterization.
-- The simple workflow still begins at `min_scale=1.0`; only explicit confirmation after its eligible image-heavy failure relaxes the floor to `0.50`, while preserving target 10,000,000 bytes, minimum JPEG quality 70, searchable-text rasterization off, collision-safe output, and existing fail-closed safeguards.
+- Simple mode still refuses to call the fitting backend for inputs at or below 10,000,000 bytes and keeps searchable-text rasterization off.
+- The simple workflow now supplies `min_scale=0.50` in its single integrated request. The image-heavy first-fit backend still exhausts full-resolution quality probes before bounded scale probes, while preserving target 10,000,000 bytes, minimum JPEG quality 70, collision-safe output, and existing fail-closed safeguards.
 
 ### Notes
 
@@ -101,7 +101,7 @@ The project is currently experimental and does not yet use formal releases.
 - Image replacement remains deliberately conservative: unsupported masks, color spaces, bit depths, decoding structures, unknown image dictionary semantics, signed/certified PDFs, or PDF/A-identified PDFs return a fail-closed result rather than being rewritten silently.
 - Downsampling still refuses general or transparency-bearing `/SMask` images because the base image and mask are not resized in lockstep. Only a redundant soft mask strictly proven fully opaque may be removed for downsampling.
 - The NucBox9 system Python is 3.14.1, but the recorded supported local validation used a dedicated venv rather than that system interpreter.
-- `min_scale` is a relative source-pixel floor, not an effective-DPI or readability guarantee. The current fallback also applies one selected scale to all supported images in the document.
+- `min_scale` is a relative source-pixel floor, not an effective-DPI or readability guarantee. The current bounded standard image downsampling also applies one selected scale to all supported images in the document.
 - The resolution-first scale/quality policy is provisional and does not claim to maximize perceptual quality across different content types.
 - Whether a compressed electronic-approval attachment is an authoritative or retained record depends on the adopting organization's rules; the project does not generalize that it is always the original or legally controlling copy.
 - The monochrome-vector route is fixed at 300 dpi; a non-fitting candidate returns `target-not-met` with no output instead of searching lower resolutions.
