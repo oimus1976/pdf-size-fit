@@ -11,10 +11,8 @@ from pdf_size_fit.fit import FitResult, FitStatus
 from pdf_size_fit.image_fit import ImageFitResult, ImageFitStatus
 from pdf_size_fit.gui import (
     ALREADY_BELOW_MESSAGE,
-    DOWNSAMPLING_FALLBACK_MIN_SCALE,
     GuiRequest,
     SIMPLE_TARGET_BYTES,
-    build_downsampling_fallback_request,
     build_request,
     build_simple_request,
     decimal_mb_to_bytes,
@@ -22,11 +20,9 @@ from pdf_size_fit.gui import (
     present_error,
     present_result,
     present_simple_result,
-    run_downsampling_fallback_if_confirmed,
     run_request,
     run_simple_input,
     run_simple_request,
-    should_offer_downsampling,
     suggest_output_path,
 )
 
@@ -118,11 +114,11 @@ def test_gui_request_preserves_safe_defaults(tmp_path: Path) -> None:
     )
     assert request.target_bytes == 10_000_000
     assert request.min_quality == 70
-    assert request.min_scale == 1.0
+    assert request.min_scale == 0.50
     assert request.allow_small_searchable_text_rasterization is False
 
 
-def test_simple_request_fixes_target_and_keeps_destructive_options_off(tmp_path: Path) -> None:
+def test_simple_request_uses_bounded_image_scale_floor_and_safe_defaults(tmp_path: Path) -> None:
     source = tmp_path / "input.pdf"
     source.write_bytes(b"synthetic")
 
@@ -143,102 +139,15 @@ def _simple_request(tmp_path: Path) -> tuple[GuiRequest, Path]:
     return request, request.output_path
 
 
-@pytest.mark.parametrize(
-    "result",
-    [
-        _result(FitStatus.FITTED, delegated_route_status="fitted"),
-        _result(FitStatus.ALREADY_BELOW_TARGET),
-        _result(FitStatus.UNSUPPORTED_ROUTE, route=Route.VECTOR_COLOR),
-        _result(
-            FitStatus.ROUTE_FAILED,
-            delegated_route_status="target-not-met",
-            route=Route.VECTOR_MONOCHROME,
-        ),
-        _result(
-            FitStatus.ROUTE_FAILED,
-            delegated_route_status="unsupported-image",
-        ),
-    ],
-)
-def test_only_image_heavy_target_not_met_offers_downsampling(
-    tmp_path: Path,
-    result: FitResult,
-) -> None:
-    request, _ = _simple_request(tmp_path)
-    assert should_offer_downsampling(request, result) is False
+def test_simple_mode_has_no_second_downsampling_retry_api() -> None:
+    import pdf_size_fit.gui as gui
+
+    assert not hasattr(gui, "should_offer_downsampling")
+    assert not hasattr(gui, "build_downsampling_fallback_request")
+    assert not hasattr(gui, "run_downsampling_fallback_if_confirmed")
 
 
-def test_image_heavy_target_not_met_builds_reviewed_fallback(tmp_path: Path) -> None:
-    request, _ = _simple_request(tmp_path)
-    failure = _result(FitStatus.ROUTE_FAILED, delegated_route_status="target-not-met")
-
-    fallback = build_downsampling_fallback_request(request, failure)
-
-    assert should_offer_downsampling(request, failure) is True
-    assert fallback.min_scale == DOWNSAMPLING_FALLBACK_MIN_SCALE == 0.50
-    assert fallback.target_bytes == 10_000_000
-    assert fallback.min_quality == 70
-    assert fallback.allow_small_searchable_text_rasterization is False
-    assert fallback.input_path == request.input_path
-    assert fallback.output_path == request.output_path
-
-
-def test_cancelling_downsampling_does_not_call_fitter_or_create_output(
-    tmp_path: Path,
-) -> None:
-    request, output = _simple_request(tmp_path)
-    failure = _result(FitStatus.ROUTE_FAILED, delegated_route_status="target-not-met")
-    calls = 0
-
-    def fitter(*args: object, **kwargs: object) -> FitResult:
-        nonlocal calls
-        calls += 1
-        return _result(FitStatus.FITTED, delegated_route_status="fitted")
-
-    retry = run_downsampling_fallback_if_confirmed(
-        request,
-        failure,
-        confirmed=False,
-        fitter=fitter,
-    )
-
-    assert retry is None
-    assert calls == 0
-    assert not output.exists()
-
-
-def test_accepting_downsampling_calls_existing_fitter_with_only_reviewed_relaxation(
-    tmp_path: Path,
-) -> None:
-    request, _ = _simple_request(tmp_path)
-    failure = _result(FitStatus.ROUTE_FAILED, delegated_route_status="target-not-met")
-    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
-
-    def fitter(*args: object, **kwargs: object) -> FitResult:
-        calls.append((args, kwargs))
-        return _result(FitStatus.ROUTE_FAILED, delegated_route_status="target-not-met")
-
-    run_downsampling_fallback_if_confirmed(
-        request,
-        failure,
-        confirmed=True,
-        fitter=fitter,
-    )
-
-    assert calls == [
-        (
-            (request.input_path, request.output_path),
-            {
-                "target_bytes": 10_000_000,
-                "min_quality": 70,
-                "min_scale": 0.50,
-                "allow_small_searchable_text_rasterization": False,
-            },
-        )
-    ]
-
-
-def test_fallback_success_reports_selected_scale_and_quality(tmp_path: Path) -> None:
+def test_auto_downsample_success_reports_selected_scale_and_quality(tmp_path: Path) -> None:
     output = tmp_path / "oversized-fit-2.pdf"
     route_result = ImageFitResult(
         status=ImageFitStatus.FITTED,
@@ -266,7 +175,7 @@ def test_fallback_success_reports_selected_scale_and_quality(tmp_path: Path) -> 
         route_result=route_result,
     )
 
-    presentation = present_simple_result(result, downsampling_fallback=True)
+    presentation = present_simple_result(result)
 
     assert presentation.successful_output == output
     assert "画像スケール: 83%" in presentation.summary
@@ -275,15 +184,15 @@ def test_fallback_success_reports_selected_scale_and_quality(tmp_path: Path) -> 
     assert '"selected_scale": 0.83' in presentation.details
 
 
-def test_fallback_failure_is_not_presented_as_success_and_has_no_output(
+def test_auto_downsample_exhaustion_is_not_presented_as_success_and_has_no_output(
     tmp_path: Path,
 ) -> None:
     result = _result(FitStatus.ROUTE_FAILED, delegated_route_status="target-not-met")
-    presentation = present_simple_result(result, downsampling_fallback=True)
+    presentation = present_simple_result(result)
 
     assert presentation.category == "target-not-met"
     assert presentation.successful_output is None
-    assert "画像を縮小しても" in presentation.title
+    assert "10MB以下にできませんでした" in presentation.title
     assert "出力ファイルは作成していません" in presentation.summary
     assert not (tmp_path / "output.pdf").exists()
 
@@ -340,11 +249,29 @@ def test_simple_oversized_input_maps_to_integrated_backend_once(tmp_path: Path) 
             {
                 "target_bytes": 10_000_000,
                 "min_quality": 70,
-                "min_scale": 1.0,
+                "min_scale": 0.50,
                 "allow_small_searchable_text_rasterization": False,
             },
         )
     ]
+
+
+def test_simple_target_not_met_is_one_backend_call_without_retry(tmp_path: Path) -> None:
+    source = tmp_path / "oversized.pdf"
+    with source.open("wb") as stream:
+        stream.truncate(10_000_001)
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def fitter(*args: object, **kwargs: object) -> FitResult:
+        calls.append((args, kwargs))
+        return _result(FitStatus.ROUTE_FAILED, delegated_route_status="target-not-met")
+
+    result = run_simple_input(source, fitter=fitter)
+
+    assert result.status is FitStatus.ROUTE_FAILED
+    assert result.delegated_route_status == "target-not-met"
+    assert len(calls) == 1
+    assert calls[0][1]["min_scale"] == 0.50
 
 
 def test_shell_argument_and_gui_drop_use_the_same_simple_backend_path(tmp_path: Path) -> None:
