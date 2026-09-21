@@ -1,0 +1,17 @@
+# Repository line-ending policy.
+# Keep source/docs stable across Windows and Unix checkouts.
+* text=auto
+
+*.py   text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.txt  text eol=lf
+.gitattributes text eol=lf
+
+# Native Windows operator scripts.
+*.ps1  text eol=crlf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf

@@ -31,9 +31,11 @@ The integrated backend diagnoses the input and automatically dispatches only to 
 pdf-size-fit .\oversize.pdf .\oversize-fit.pdf --target-bytes 10000000
 ```
 
-It returns success without writing output for `skip`, delegates `image-heavy` and `vector-monochrome` to their existing fail-closed fitters, and refuses `unclassified` without writing output. Callers do not choose the PDF-internal route. Machine-readable output is available with `--json`.
+It returns success without writing output for `skip`, dispatches supported `image-heavy`, `vector-monochrome`, and `vector-color` inputs through their fail-closed execution paths, and refuses `unclassified` without writing output. Callers do not choose the PDF-internal route. Machine-readable output is available with `--json`.
 
-The integrated command preserves the existing route controls and defaults. Image downsampling remains off unless `--min-scale` is set below `1.0`; `--min-quality` keeps the image route's existing default of `70`. Small searchable-text rasterization on the monochrome route remains off unless `--allow-small-searchable-text-rasterization` is explicitly supplied, and monochrome rendering remains fixed at 300 dpi.
+For `image-heavy` inputs, the integrated standard path uses a bounded stop-on-first-success strategy: full-resolution JPEG quality probes `100 -> 90 -> 75 -> 70`, filtered by any higher configured quality floor. If downsampling has already been explicitly enabled by the caller, it uses a small bounded scale-probe set and stops after the first validated candidate that meets the byte target. Downsampling remains off by default with `min_scale=1.0`.
+
+The route-specific `pdf-size-fit-image` command still uses the existing refinement/best-fit search during this Issue #21 transition. That path is being retained as the basis for a later explicit high-quality mode; the default integrated GUI/backend path is the bounded standard first-fit strategy. Small searchable-text rasterization on the monochrome route remains explicit opt-in, and monochrome rendering remains fixed at 300 dpi.
 
 ## Windows simple GUI quick start
 
