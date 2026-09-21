@@ -114,7 +114,7 @@ def test_gui_request_preserves_safe_defaults(tmp_path: Path) -> None:
     )
     assert request.target_bytes == 10_000_000
     assert request.min_quality == 70
-    assert request.min_scale == 0.50
+    assert request.min_scale == 1.0
     assert request.allow_small_searchable_text_rasterization is False
 
 
@@ -126,7 +126,7 @@ def test_simple_request_uses_bounded_image_scale_floor_and_safe_defaults(tmp_pat
 
     assert SIMPLE_TARGET_BYTES == 10_000_000
     assert request.target_bytes == 10_000_000
-    assert request.min_scale == 1.0
+    assert request.min_scale == 0.50
     assert request.allow_small_searchable_text_rasterization is False
     assert request.output_path == tmp_path / "input-fit.pdf"
 
