@@ -127,7 +127,7 @@ def build_request(
 
 
 def build_simple_request(input_path: str | Path) -> GuiRequest:
-    """Build the fixed, non-destructive-opt-in request used by every simple input."""
+    """Build the fixed standard-mode request used by every simple input."""
     source = Path(input_path)
     return build_request(
         str(source),
@@ -135,7 +135,7 @@ def build_simple_request(input_path: str | Path) -> GuiRequest:
         "10",
         str(SIMPLE_MIN_QUALITY),
         str(round(SIMPLE_MIN_SCALE * 100)),
-        False,
+        SIMPLE_ALLOW_TEXT_RASTERIZATION,
     )
 
 
