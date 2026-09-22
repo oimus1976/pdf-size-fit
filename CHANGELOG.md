@@ -58,16 +58,17 @@ The project is currently experimental and does not yet use formal releases.
 - Headless GUI-helper regression coverage for output safety, target conversion, exact backend argument mapping, status presentation, and launcher/entry-point configuration.
 - Default simple GUI centered on `PDFをここにドロップ`, with an in-window D&D target, file picker fallback, and Explorer shell-argument input.
 - One fixed simple workflow shared by picker, GUI D&D, and shell input, using an exact `10_000_000`-byte boundary and the existing integrated `fit_pdf` backend for oversized PDFs only.
+- Automatic bounded downsampling in simple mode using a single request with `min_scale=0.50` and `min_quality=70`.
 - Exact no-conversion behavior and Japanese message for PDFs at or below 10,000,000 bytes, plus same-directory `name-fit.pdf`, `name-fit-2.pdf`, ... collision-safe naming for oversized inputs.
 - A `詳細設定` disclosure that retains the previous quality, scale, rasterization opt-in, output, and backend-evidence controls while keeping them out of the default simple view.
+- Route-neutral target-not-met presentation in simple mode (`10MB以下にできませんでした。`).
 - Cross-platform GitHub Actions coverage on Ubuntu and Windows for Python 3.11 and 3.12; GUI workflow tests remain headless and display-independent.
 - Exact-pinned Windows x64 PyInstaller 6.22.2 onedir packaging, an isolated build script, artifact-level native/runtime inventory, collected license texts, and `THIRD_PARTY_NOTICES.txt`.
 - NucBox9 Stage 2 evidence for ZIP-only startup without Python on PATH, Explorer-equivalent shell input, `<=10 MB` no-op, collision-safe oversized synthetic compression, immutability, pypdf/PDFium reopen/render, and zero observed runtime TCP connections.
-- Explicit Japanese simple-mode offer to retry only an eligible `image-heavy` `target-not-met` result through the existing bounded downsampling search, with cancellation and no-output failure behavior.
-- Headless fallback-flow coverage for offer eligibility, exact option forwarding, cancellation, success evidence, and failure presentation.
 
 ### Changed
 
+- Simple mode in GUI now performs downsampling automatically in a single request with `min_scale=0.50` rather than using a two-request confirmation fallback flow. Advanced GUI default scale remains 100% (`min_scale=1.0`), and direct API/CLI defaults remain unchanged.
 - The integrated image-heavy `fit_pdf` path now uses a bounded standard first-fit search (`100 -> 90 -> 75 -> 70`, subject to the configured quality floor) and stops after the first validated candidate that meets the target. The route-specific `pdf-size-fit-image` fitter retains its existing refinement/best-fit behavior for the later explicit high-quality mode.
 
 - Color routing now scans every page at low resolution and uses the maximum per-page color fraction, reducing the risk of incorrectly classifying a partially color document as monochrome.
