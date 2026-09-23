@@ -7,7 +7,7 @@ The primary use case is not general PDF optimization. It is a recovery path for 
 ## Design goals
 
 - Offline operation.
-- Single-PDF input and output for the MVP.
+- Single-PDF input; prefer a single fitted output and use multi-file page splitting only as an explicit fallback.
 - No runtime downloads or required network access.
 - Preserve the original input unchanged.
 - Prefer the least destructive transformation that can satisfy the target.
@@ -135,6 +135,39 @@ Working hypothesis:
 - Search resolution/quality combinations from higher quality toward lower quality until the target is met.
 
 The current synthetic fixture reached the target at 200 dpi / JPEG quality 90 and also at 180 dpi / quality 92. The search policy is not yet finalized.
+
+## Page-splitting fallback
+
+Page splitting is a recovery path after safe single-file compression has exhausted its allowed range. It is not an alternate route for hard refusals.
+
+Control flow:
+
+```text
+compression request
+  -> success
+  -> hard refusal
+  -> target-not-met
+       |
+       +-- strict split eligibility
+              |
+              +-- ineligible -> no output
+              +-- eligible -> split-available
+                               |
+                               +-- user cancels -> no split request
+                               +-- user approves -> separate split request
+```
+
+The integrated `fit_pdf` result becomes `split-available` only when the delegated route status is exactly `target-not-met` and the split-specific preflight succeeds. Signature/certification, PDF/A identification, AcroForm, annotations, outlines, named/document navigation semantics, embedded/associated files, unsupported geometry, malformed raw page trees, and unknown catalog/page semantics remain fail-closed.
+
+The GUI authority boundary is deliberately two-request. The compression worker finishes before confirmation. Tk displays the approval prompt on the UI thread. Approval captures a source stat snapshot and starts a new worker; split execution verifies that snapshot and reruns the full preflight before mutation. Cancellation never invokes the split backend.
+
+For a source with N pages, split search starts at the first unassigned page and tries candidate end pages from the final remaining page downward. Each candidate is a freshly emitted contiguous page subset from the original source. The first measured candidate at or below the target is therefore the longest fitting range for that current start page. Search then resumes at the following page. If the one-page candidate still exceeds the target, the operation returns `single-page-oversize`.
+
+The implementation intentionally does not use equal-page-count splitting or binary search. Emitted PDF sizes are not assumed monotonic. The absolute unique contiguous-range upper bound is `N * (N + 1) / 2`; actual success may use fewer probes. The greedy longest-range-at-current-start policy should not be described as a mathematical global minimum-partition optimizer without additional evidence.
+
+All candidate parts are generated in temporary storage and validated before publication. Validation checks the selected source page count, MediaBox, rotation, pypdf reopenability, PDFium page count/renderability, and final byte target. Final names are selected as one collision-safe group (`name-part-N.pdf`, then `name-split-2-part-N.pdf`, etc.) and created exclusively. If publication or final validation fails, every final file created by that operation is removed. This provides exception-safe rollback, not a claim of filesystem-level multi-file atomicity under process or power loss.
+
+The source PDF is never modified.
 
 ## Target-size semantics
 
