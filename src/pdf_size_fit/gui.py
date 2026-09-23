@@ -254,6 +254,13 @@ def _format_size(value: int | None) -> str:
     return f"{value / 1_000_000:.3f} MB ({value:,} bytes)"
 
 
+def _format_target_label(value: int) -> str:
+    if value % 1_000_000 == 0:
+        return f"{value // 1_000_000}MB"
+    decimal_mb = f"{value / 1_000_000:.6f}".rstrip("0").rstrip(".")
+    return f"{decimal_mb}MB"
+
+
 def present_simple_result(result: FitResult) -> ResultPresentation:
     details = json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
     if result.status is FitStatus.FITTED:
@@ -417,11 +424,12 @@ def present_split_result(result: SplitResult) -> ResultPresentation:
     details = json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
     if result.status is SplitStatus.SPLIT:
         first_output = Path(result.parts[0].output_path) if result.parts else None
+        target_label = _format_target_label(result.target_bytes)
         return ResultPresentation(
             category="split",
             title=f"PDFを{len(result.parts)}ファイルに分割しました。",
             summary=(
-                "すべて10MB以下です。\n"
+                f"すべて{target_label}以下です。\n"
                 "元のPDFは変更していません。\n"
                 + (
                     f"保存先: {first_output.parent}"
@@ -809,12 +817,13 @@ class _Application:
             )
             return
 
+        target_label = _format_target_label(result.target_bytes)
         approved = self.messagebox.askyesno(
             "PDFを分割できます",
             (
-                "このPDFは、1ファイルのまま10MB以下にすることが難しいため、"
+                f"このPDFは、1ファイルのまま{target_label}以下にすることが難しいため、"
                 "複数のPDFに分割できます。\n\n"
-                "各ファイルが10MB以下になるよう自動で分割します。\n"
+                f"各ファイルが{target_label}以下になるよう自動で分割します。\n"
                 "元のPDFは変更しません。\n\n"
                 "分割しますか？"
             ),
