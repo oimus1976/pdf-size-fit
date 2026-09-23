@@ -1242,3 +1242,111 @@ def test_single_page_oversize_presentation_uses_actual_custom_target(
 
     assert "5MB以下" in presentation.summary
     assert "10MB以下" not in presentation.summary
+
+def test_run_split_request_forwards_output_directory(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.pdf"
+    source.write_bytes(b"synthetic")
+    output_directory = tmp_path / "chosen-output"
+    output_directory.mkdir()
+    snapshot = SourceSnapshot(size_bytes=9, mtime_ns=123)
+    captured: dict[str, object] = {}
+
+    def splitter(input_path: Path, **kwargs: object) -> SplitResult:
+        captured["input_path"] = input_path
+        captured.update(kwargs)
+        return _successful_split_result(tmp_path)
+
+    result = run_split_request(
+        source,
+        10_000_000,
+        snapshot,
+        output_directory=output_directory,
+        splitter=splitter,
+    )
+
+    assert result.status is SplitStatus.SPLIT
+    assert captured["output_directory"] == output_directory
+
+
+def test_begin_remembers_requested_split_output_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock
+
+    source = tmp_path / "input.pdf"
+    source.write_bytes(b"%PDF-1.4 synthetic")
+    output_directory = tmp_path / "chosen-output"
+    output_directory.mkdir()
+    request = GuiRequest(
+        input_path=source,
+        output_path=output_directory / "custom-name.pdf",
+        target_bytes=10_000_000,
+        min_quality=70,
+        min_scale=1.0,
+        allow_small_searchable_text_rasterization=False,
+    )
+
+    app = gui._Application.__new__(gui._Application)
+    app.busy = False
+    app.successful_output = None
+    app.simple_controls = []
+    app.advanced_controls = []
+    app.open_button = MagicMock()
+    app.status_var = MagicMock()
+    app.progress = MagicMock()
+    app.details = MagicMock()
+    app.root = MagicMock()
+
+    monkeypatch.setattr("threading.Thread", MagicMock())
+
+    app._begin(request, simple=False)
+
+    assert app.split_output_directory == output_directory
+
+
+def test_split_offer_snapshots_before_prompt_and_uses_requested_output_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock
+
+    app = gui._Application.__new__(gui._Application)
+    app.root = MagicMock()
+    app.messagebox = MagicMock()
+    app._begin_split = MagicMock()
+    app._show = MagicMock()
+    output_directory = tmp_path / "chosen-output"
+    output_directory.mkdir()
+    app.split_output_directory = output_directory
+
+    result = _result(
+        FitStatus.SPLIT_AVAILABLE,
+        delegated_route_status="target-not-met",
+    )
+    snapshot = SourceSnapshot(size_bytes=20_000_000, mtime_ns=456)
+    order: list[str] = []
+
+    def capture(path: object) -> SourceSnapshot:
+        order.append("snapshot")
+        return snapshot
+
+    def askyesno(*args: object, **kwargs: object) -> bool:
+        order.append("prompt")
+        assert order == ["snapshot", "prompt"]
+        return True
+
+    monkeypatch.setattr(gui, "capture_source_snapshot", capture)
+    app.messagebox.askyesno.side_effect = askyesno
+
+    app._offer_split(result, simple=False)
+
+    app._begin_split.assert_called_once_with(
+        result,
+        simple=False,
+        snapshot=snapshot,
+        output_directory=output_directory,
+    )
+
