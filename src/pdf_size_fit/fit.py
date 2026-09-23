@@ -20,6 +20,7 @@ from .monochrome_fit import (
     MonochromeFitStatus,
     fit_monochrome_vector_pdf,
 )
+from .progress import ProgressCallback
 
 
 class FitStatus(str, Enum):
@@ -112,6 +113,7 @@ def fit_pdf(
     min_quality: int = 70,
     min_scale: float = 1.0,
     allow_small_searchable_text_rasterization: bool = False,
+    progress_callback: ProgressCallback | None = None,
 ) -> FitResult:
     """Diagnose a PDF and dispatch only to an existing supported safe route."""
     if target_bytes <= 0:
@@ -140,37 +142,52 @@ def fit_pdf(
         )
 
     if diagnosis.route is Route.IMAGE_HEAVY:
+        image_kwargs: dict[str, Any] = {
+            "target_bytes": target_bytes,
+            "min_quality": min_quality,
+            "min_scale": min_scale,
+        }
+        if progress_callback is not None:
+            image_kwargs["progress_callback"] = progress_callback
         route_result = fit_image_heavy_pdf(
             input_path,
             output_path,
-            target_bytes=target_bytes,
-            min_quality=min_quality,
-            min_scale=min_scale,
+            **image_kwargs,
         )
         return _normalize_route_result(diagnosis, route_result)
 
     if diagnosis.route is Route.VECTOR_MONOCHROME:
+        mono_kwargs: dict[str, Any] = {
+            "target_bytes": target_bytes,
+            "dpi": FIXED_DPI,
+            "allow_small_searchable_text_rasterization": (
+                allow_small_searchable_text_rasterization
+            ),
+        }
+        if progress_callback is not None:
+            mono_kwargs["progress_callback"] = progress_callback
         route_result = fit_monochrome_vector_pdf(
             input_path,
             output_path,
-            target_bytes=target_bytes,
-            dpi=FIXED_DPI,
-            allow_small_searchable_text_rasterization=(
-                allow_small_searchable_text_rasterization
-            ),
+            **mono_kwargs,
         )
         return _normalize_route_result(diagnosis, route_result)
 
     if diagnosis.route is Route.VECTOR_COLOR:
+        color_kwargs: dict[str, Any] = {
+            "target_bytes": target_bytes,
+            "dpi": FIXED_COLOR_DPI,
+            "jpeg_quality": 90,
+            "allow_small_searchable_text_rasterization": (
+                allow_small_searchable_text_rasterization
+            ),
+        }
+        if progress_callback is not None:
+            color_kwargs["progress_callback"] = progress_callback
         route_result = fit_color_vector_pdf(
             input_path,
             output_path,
-            target_bytes=target_bytes,
-            dpi=FIXED_COLOR_DPI,
-            jpeg_quality=90,
-            allow_small_searchable_text_rasterization=(
-                allow_small_searchable_text_rasterization
-            ),
+            **color_kwargs,
         )
         return _normalize_route_result(diagnosis, route_result)
 

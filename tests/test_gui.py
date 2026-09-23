@@ -10,6 +10,7 @@ import pdf_size_fit.gui as gui
 from pdf_size_fit.diagnose import Route
 from pdf_size_fit.fit import FitResult, FitStatus
 from pdf_size_fit.image_fit import ImageFitResult, ImageFitStatus
+from pdf_size_fit.progress import ProgressEvent, ProgressPhase
 from pdf_size_fit.gui import (
     ALREADY_BELOW_MESSAGE,
     GuiRequest,
@@ -410,6 +411,253 @@ def test_unexpected_error_has_japanese_status_and_details() -> None:
     assert presentation.category == "unexpected-error"
     assert "予期しないエラー" in presentation.title
     assert "RuntimeError: boom" in presentation.details
+
+
+def test_run_simple_input_forwards_progress_callback(tmp_path: Path) -> None:
+    source = tmp_path / "oversized.pdf"
+    with source.open("wb") as stream:
+        stream.truncate(10_000_001)
+
+    passed_callback = None
+
+    def fitter(*args: object, **kwargs: object) -> FitResult:
+        nonlocal passed_callback
+        passed_callback = kwargs.get("progress_callback")
+        return _result(FitStatus.FITTED, delegated_route_status="fitted")
+
+    dummy_cb = lambda e: None
+    run_simple_input(source, fitter=fitter, progress_callback=dummy_cb)
+
+    assert passed_callback is dummy_cb
+
+
+class MockWidget:
+    def __init__(self) -> None:
+        self.config: dict[str, object] = {}
+
+    def configure(self, **kwargs: object) -> None:
+        self.config.update(kwargs)
+
+    def stop(self) -> None:
+        self.stopped = True
+
+    def start(self, interval: int = 10) -> None:
+        self.started = True
+
+    def set(self, value: object) -> None:
+        self.val = value
+
+    def get(self) -> object:
+        return getattr(self, "val", "")
+
+    def delete(self, *args: object) -> None:
+        pass
+
+    def insert(self, *args: object) -> None:
+        pass
+
+
+def test_app_poll_consumes_progress_events_without_ending_busy(tmp_path: Path) -> None:
+    from unittest.mock import MagicMock
+    import queue
+
+    app = gui._Application.__new__(gui._Application)
+    app.events = queue.Queue()
+    app.busy = True
+    app.simple_controls = []
+    app.advanced_controls = []
+    app.status_var = MockWidget()
+    app.progress = MockWidget()
+    app.root = MagicMock()
+
+    # Enqueue a progress event
+    progress_event = ProgressEvent(
+        phase=ProgressPhase.IMAGE_OPTIMIZATION, completed=2, total=9
+    )
+    app.events.put(("progress", progress_event, True))
+
+    app._poll()
+
+    assert app.busy is True
+    assert app.status_var.get() == "画像を最適化しています… 2/9"
+    assert app.progress.config["mode"] == "determinate"
+    assert app.progress.config["maximum"] == 9
+    assert app.progress.config["value"] == 2
+
+
+def test_app_poll_handles_page_optimization_progress(tmp_path: Path) -> None:
+    from unittest.mock import MagicMock
+    import queue
+
+    app = gui._Application.__new__(gui._Application)
+    app.events = queue.Queue()
+    app.busy = True
+    app.simple_controls = []
+    app.advanced_controls = []
+    app.status_var = MockWidget()
+    app.progress = MockWidget()
+    app.root = MagicMock()
+
+    progress_event = ProgressEvent(
+        phase=ProgressPhase.PAGE_OPTIMIZATION, completed=3, total=12
+    )
+    app.events.put(("progress", progress_event, True))
+
+    app._poll()
+
+    assert app.busy is True
+    assert app.status_var.get() == "ページを最適化しています… 3/12"
+    assert app.progress.config["mode"] == "determinate"
+    assert app.progress.config["maximum"] == 12
+    assert app.progress.config["value"] == 3
+
+
+def test_begin_resets_progressbar_to_indeterminate_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import MagicMock
+
+    class RecordingProgressWidget:
+        def __init__(self) -> None:
+            self.config: dict[str, object] = {
+                "mode": "determinate",
+                "maximum": 9,
+                "value": 5,
+            }
+            self.calls: list[tuple[object, ...]] = []
+
+        def configure(self, **kwargs: object) -> None:
+            self.calls.append(("configure", dict(kwargs)))
+            self.config.update(kwargs)
+
+        def stop(self) -> None:
+            self.calls.append(("stop",))
+
+        def start(self, interval: int = 10) -> None:
+            self.calls.append(("start", interval, dict(self.config)))
+
+    app = gui._Application.__new__(gui._Application)
+    app.busy = False
+    app.successful_output = None
+    app.simple_controls = []
+    app.advanced_controls = []
+    app.open_button = MockWidget()
+    app.status_var = MockWidget()
+    app.progress = RecordingProgressWidget()
+    app.details = MockWidget()
+    app.root = MagicMock()
+
+    # Prevent spawning actual thread in headless test
+    monkeypatch.setattr("threading.Thread", MagicMock())
+
+    source = tmp_path / "input.pdf"
+    source.write_bytes(b"%PDF-1.4 synthetic")
+    output = tmp_path / "output.pdf"
+    request = GuiRequest(
+        input_path=source,
+        output_path=output,
+        target_bytes=10_000_000,
+        min_quality=70,
+        min_scale=1.0,
+        allow_small_searchable_text_rasterization=False,
+    )
+
+    app._begin(request, simple=True)
+
+    # Verify progress bar is cleanly reset to indeterminate mode with cleared values
+    assert app.progress.config["mode"] == "indeterminate"
+    assert app.progress.config["value"] == 0
+    assert app.progress.config["maximum"] != 9
+
+    # Verify start() was called with reset state (mode indeterminate, value 0)
+    start_calls = [c for c in app.progress.calls if c[0] == "start"]
+    assert len(start_calls) == 1
+    start_call = start_calls[0]
+    config_at_start = start_call[2]
+    assert config_at_start["mode"] == "indeterminate"
+    assert config_at_start["value"] == 0
+
+
+def test_run_request_supports_strict_fitter_without_progress_callback(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.pdf"
+    source.write_bytes(b"synthetic")
+    output = tmp_path / "output.pdf"
+
+    # Strict fitter that does NOT accept progress_callback or **kwargs (pre-Issue-#30 signature)
+    def strict_fitter(
+        input_path: Path,
+        output_path: Path,
+        *,
+        target_bytes: int,
+        min_quality: int,
+        min_scale: float,
+        allow_small_searchable_text_rasterization: bool,
+    ) -> FitResult:
+        return _result(FitStatus.FITTED, delegated_route_status="fitted")
+
+    request = GuiRequest(
+        input_path=source,
+        output_path=output,
+        target_bytes=10_000_000,
+        min_quality=70,
+        min_scale=1.0,
+        allow_small_searchable_text_rasterization=False,
+    )
+
+    # Calling run_request without progress_callback must not break the strict fitter
+    result = run_request(request, fitter=strict_fitter)
+    assert result.status is FitStatus.FITTED
+
+
+def test_app_poll_drains_multiple_progress_events_and_finishes_at_result(
+    tmp_path: Path,
+) -> None:
+    from unittest.mock import MagicMock
+    import queue
+
+    app = gui._Application.__new__(gui._Application)
+    app.events = queue.Queue()
+    app.busy = True
+    control1 = MockWidget()
+    control2 = MockWidget()
+    app.simple_controls = [control1]
+    app.advanced_controls = [control2]
+    app.open_button = MockWidget()
+    app.status_var = MockWidget()
+    app.progress = MockWidget()
+    app.details = MockWidget()
+    app.root = MagicMock()
+
+    # Enqueue multiple progress events followed immediately by terminal result
+    event1 = ProgressEvent(
+        phase=ProgressPhase.PAGE_OPTIMIZATION, completed=1, total=3
+    )
+    event2 = ProgressEvent(
+        phase=ProgressPhase.PAGE_OPTIMIZATION, completed=2, total=3
+    )
+    event3 = ProgressEvent(
+        phase=ProgressPhase.PAGE_OPTIMIZATION, completed=3, total=3
+    )
+    res = _result(FitStatus.FITTED, delegated_route_status="fitted")
+
+    app.events.put(("progress", event1, False))
+    app.events.put(("progress", event2, False))
+    app.events.put(("progress", event3, False))
+    app.events.put(("result", res, False))
+
+    # Single call to _poll() should drain the queue completely through the terminal event
+    app._poll()
+
+    assert app.busy is False
+    assert app.events.empty()
+    assert control1.config.get("state") == "normal"
+    assert control2.config.get("state") == "normal"
+    assert app.progress.config.get("mode") == "indeterminate"
+    assert app.progress.config.get("value") == 0
+    # No pending poll should have been scheduled because busy became False
+    app.root.after.assert_not_called()
 
 
 def test_launcher_and_gui_entry_point_exist() -> None:
