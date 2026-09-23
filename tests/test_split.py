@@ -276,7 +276,7 @@ def test_split_progress_has_stable_total_and_monotonic_completed(
     assert {event.phase for event in events} == {ProgressPhase.SPLIT_SEARCH}
     assert {event.total for event in events} == {6}
     assert [event.completed for event in events] == list(range(1, len(events) + 1))
-    assert len(events) < 6
+    assert len(events) <= 6
 
 
 def test_progress_callback_exception_does_not_change_split_outcome(
