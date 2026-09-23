@@ -126,6 +126,7 @@ def fit_pdf(
     allow_small_searchable_text_rasterization: bool = False,
     progress_callback: ProgressCallback | None = None,
 ) -> FitResult:
+    """Diagnose a PDF and dispatch only to an existing supported safe route."""
     if not isinstance(mode, FitMode):
         raise TypeError("mode must be a FitMode")
 
