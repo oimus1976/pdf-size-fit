@@ -441,11 +441,12 @@ def present_split_result(result: SplitResult) -> ResultPresentation:
             successful_output=first_output,
         )
     if result.status is SplitStatus.SINGLE_PAGE_OVERSIZE:
+        target_label = _format_target_label(result.target_bytes)
         return ResultPresentation(
             category="single-page-oversize",
             title="自動分割では処理できませんでした。",
             summary=(
-                "このPDFは、ページ単位に分割しても10MB以下にできない"
+                f"このPDFは、ページ単位に分割しても{target_label}以下にできない"
                 "ページが含まれています。\n"
                 "元のPDFは変更していません。"
             ),
