@@ -18,6 +18,17 @@ from .monochrome_fit import (
     MonochromeFitStatus,
     fit_monochrome_vector_pdf,
 )
+from .split import (
+    SourceSnapshot,
+    SplitEligibilityResult,
+    SplitEligibilityStatus,
+    SplitPart,
+    SplitResult,
+    SplitStatus,
+    capture_source_snapshot,
+    evaluate_split_eligibility,
+    split_pdf,
+)
 
 __all__ = [
     "Diagnosis",
@@ -36,4 +47,13 @@ __all__ = [
     "MonochromeFitResult",
     "MonochromeFitStatus",
     "fit_monochrome_vector_pdf",
+    "SourceSnapshot",
+    "SplitEligibilityResult",
+    "SplitEligibilityStatus",
+    "SplitPart",
+    "SplitResult",
+    "SplitStatus",
+    "capture_source_snapshot",
+    "evaluate_split_eligibility",
+    "split_pdf",
 ]
