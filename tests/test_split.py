@@ -155,13 +155,13 @@ def test_split_search_selects_largest_fitting_contiguous_ranges(
         page_end: int,
     ) -> None:
         built.append((page_start, page_end))
-        size = sizes.get((page_start, page_end), 400)
+        size = sizes.get((page_start, page_end), 300)
         candidate_path.write_bytes(b"x" * size)
 
     monkeypatch.setattr(split_module, "_build_subset", fake_build_subset)
     monkeypatch.setattr(split_module, "_validate_subset", lambda *args, **kwargs: None)
 
-    result = split_pdf(source, target_bytes=1000)
+    result = split_pdf(source, target_bytes=500)
 
     assert result.status is SplitStatus.SPLIT
     assert _selected_ranges(result) == [(1, 3), (4, 5)]
