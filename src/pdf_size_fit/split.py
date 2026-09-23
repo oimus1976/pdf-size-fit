@@ -622,7 +622,7 @@ def _copy_exclusive(source: Path, destination: Path) -> None:
         with source.open("rb") as input_file, destination.open("xb") as output_file:
             created = True
             shutil.copyfileobj(input_file, output_file)
-    except Exception:
+    except BaseException:
         if created:
             destination.unlink(missing_ok=True)
         raise
