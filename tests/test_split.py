@@ -140,9 +140,9 @@ def test_split_search_selects_largest_fitting_contiguous_ranges(
     _write_blank_pdf(source, pages=5)
 
     sizes = {
-        (1, 5): 1500,
-        (1, 4): 1200,
-        (1, 3): 900,
+        (1, 5): 800,
+        (1, 4): 700,
+        (1, 3): 400,
         (3, 5): 1100,
         (3, 4): 700,
     }
@@ -177,8 +177,8 @@ def test_split_search_does_not_assume_size_monotonicity(
     _write_blank_pdf(source, pages=4)
 
     sizes = {
-        (1, 4): 1300,
-        (1, 3): 900,
+        (1, 4): 800,
+        (1, 3): 400,
         (4, 4): 300,
     }
 
@@ -188,12 +188,12 @@ def test_split_search_does_not_assume_size_monotonicity(
         page_start: int,
         page_end: int,
     ) -> None:
-        candidate_path.write_bytes(b"x" * sizes.get((page_start, page_end), 1400))
+        candidate_path.write_bytes(b"x" * sizes.get((page_start, page_end), 800))
 
     monkeypatch.setattr(split_module, "_build_subset", fake_build_subset)
     monkeypatch.setattr(split_module, "_validate_subset", lambda *args, **kwargs: None)
 
-    result = split_pdf(source, target_bytes=1000)
+    result = split_pdf(source, target_bytes=500)
 
     assert result.status is SplitStatus.SPLIT
     assert _selected_ranges(result) == [(1, 3), (4, 4)]
@@ -217,7 +217,7 @@ def test_single_page_oversize_is_explicit_failure(
     monkeypatch.setattr(split_module, "_build_subset", fake_build_subset)
     monkeypatch.setattr(split_module, "_validate_subset", lambda *args, **kwargs: None)
 
-    result = split_pdf(source, target_bytes=1000)
+    result = split_pdf(source, target_bytes=500)
 
     assert result.status is SplitStatus.SINGLE_PAGE_OVERSIZE
     assert result.parts == ()
