@@ -8,6 +8,10 @@ The project is currently experimental and does not yet use formal releases.
 
 ### Added
 
+- Explicit opt-in high-quality best-fit mode (`FitMode.HIGH_QUALITY`, `--mode high-quality`, or GUI checkbox) for `image-heavy` PDFs, exploring the candidate space with dynamic progress reporting while preserving the standard bounded first-fit workflow as default (Issue #33).
+- Safe parameter floor enforcement (`min_quality >= 70`, `min_scale >= 0.50`) and fail-closed `unsupported-mode` status when high-quality mode is requested for vector routes.
+- Candidate evaluation progress reporting (`ProgressPhase.HIGH_QUALITY_SEARCH`) for image best-fit with dynamic candidate budget derivation based on configured quality and scale floors.
+- Dedicated GUI high-quality mode checkbox and localized progress feedback during high-quality search.
 - Color vector fitting PoC for `vector-color` diagnosis.
 - Whole-page rasterization at fixed 200 dpi / JPEG quality 90.
 - `pdf-size-fit-color` entry point and module for testing and debugging.

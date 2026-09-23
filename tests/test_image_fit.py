@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import ArrayObject, BooleanObject, DictionaryObject, NameObject, NumberObject
@@ -10,7 +12,12 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
-from pdf_size_fit.image_fit import ImageFitStatus, fit_image_heavy_pdf
+from pdf_size_fit.image_fit import (
+    ImageFitStatus,
+    _max_unique_candidate_builds,
+    fit_image_heavy_pdf,
+)
+from pdf_size_fit.progress import ProgressEvent, ProgressPhase
 from tools.generate_fixtures import generate_image_heavy, generate_vector
 
 
@@ -235,3 +242,192 @@ def test_fit_refuses_pdfa_identification_metadata(tmp_path: Path) -> None:
 
     assert result.status is ImageFitStatus.PDF_A_UNSUPPORTED
     assert not output.exists()
+
+
+def test_max_unique_candidate_builds_anchors() -> None:
+    # Required canonical anchors
+    assert _max_unique_candidate_builds(70, 0.50) == 67
+    assert _max_unique_candidate_builds(70, 1.00) == 11
+    assert _max_unique_candidate_builds(80, 0.80) == 33
+    assert _max_unique_candidate_builds(100, 1.00) == 1
+    assert _max_unique_candidate_builds(100, 0.50) == 51
+
+    # Non-coarse floor cases (min_quality = 73)
+    # _quality_probes(73) -> (100, 95, 90, 85, 80, 75, 73), n = 7
+    # max_full_res: intervals [100-95], [95-90], [90-85], [85-80], [80-75] -> builds = 6, 7, 8, 9, 10
+    # interval [75-73] has 1 interior quality (74) -> builds = 7 + 1 = 8
+    # max_full_res = 10
+    assert _max_unique_candidate_builds(73, 1.00) == 10
+    assert _max_unique_candidate_builds(73, 0.50) == 67
+    assert _max_unique_candidate_builds(73, 0.80) == 37
+
+    # Non-round min_scale whose ceil-percent conversion matters (0.805 -> 81%)
+    # ceil(0.805 * 100) = 81. num_scales = 100 - 81 = 19.
+    # For (80, 0.805): 5 + 19 + 8 = 32
+    assert _max_unique_candidate_builds(80, 0.805) == 32
+    # For (70, 0.805): 7 + 19 + 10 = 36
+    assert _max_unique_candidate_builds(70, 0.805) == 36
+
+
+def test_fit_image_heavy_pdf_progress_emission(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "output.pdf"
+    generate_image_heavy(source, pages=1, image_size=200)
+
+    events: list[ProgressEvent] = []
+    result = fit_image_heavy_pdf(
+        source,
+        output,
+        target_bytes=140_000,
+        min_quality=70,
+        min_scale=0.50,
+        progress_callback=events.append,
+    )
+
+    assert result.status is ImageFitStatus.FITTED
+    assert len(events) > 0
+    # Every event must have phase HIGH_QUALITY_SEARCH and total == 67
+    totals = {ev.total for ev in events}
+    assert len(totals) == 1
+    assert totals.pop() == 67
+    for ev in events:
+        assert ev.phase is ProgressPhase.HIGH_QUALITY_SEARCH
+        assert ev.completed <= ev.total
+
+    # Completed must strictly increment by 1
+    completed_values = [ev.completed for ev in events]
+    assert completed_values == list(range(1, len(events) + 1))
+    # Early success legitimately finishes with completed < total
+    assert len(events) < 67
+
+
+def test_fit_image_heavy_pdf_progress_callback_none_is_backward_compatible(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "output.pdf"
+    generate_image_heavy(source, pages=1, image_size=200)
+
+    result = fit_image_heavy_pdf(
+        source,
+        output,
+        target_bytes=140_000,
+        min_quality=70,
+        progress_callback=None,
+    )
+    assert result.status is ImageFitStatus.FITTED
+    assert output.exists()
+
+
+def test_fit_image_heavy_pdf_handles_callback_exceptions(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    output1 = tmp_path / "output1.pdf"
+    output2 = tmp_path / "output2.pdf"
+    generate_image_heavy(source, pages=1, image_size=200)
+
+    # Reference run without callback
+    ref_result = fit_image_heavy_pdf(
+        source,
+        output1,
+        target_bytes=140_000,
+        min_quality=70,
+    )
+
+    def faulty_callback(event: ProgressEvent) -> None:
+        raise RuntimeError("callback failure must be ignored")
+
+    result = fit_image_heavy_pdf(
+        source,
+        output2,
+        target_bytes=140_000,
+        min_quality=70,
+        progress_callback=faulty_callback,
+    )
+
+    # Ordinary exception from callback is swallowed observationally;
+    # status and candidate result remain unchanged.
+    assert result.status is ImageFitStatus.FITTED
+    assert result.status == ref_result.status
+    assert result.selected_quality == ref_result.selected_quality
+    assert result.selected_scale == ref_result.selected_scale
+    assert output2.exists()
+    assert output2.stat().st_size == output1.stat().st_size
+
+
+@pytest.mark.parametrize("exc_type", [KeyboardInterrupt, SystemExit])
+def test_fit_image_heavy_pdf_propagates_process_control_exceptions(
+    exc_type: type[BaseException], tmp_path: Path
+) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "output.pdf"
+    generate_image_heavy(source, pages=1, image_size=200)
+
+    def exit_callback(event: ProgressEvent) -> None:
+        raise exc_type()
+
+    with pytest.raises(exc_type):
+        fit_image_heavy_pdf(
+            source,
+            output,
+            target_bytes=140_000,
+            min_quality=70,
+            progress_callback=exit_callback,
+        )
+
+
+def test_fit_image_heavy_pdf_cache_reuse_avoids_duplicate_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "output.pdf"
+    generate_image_heavy(source, pages=1, image_size=200)
+
+    target_bytes = 10_000
+
+    built_candidates: list[tuple[int, int]] = []
+
+    def mock_build_candidate(
+        input_pdf_path: Path,
+        candidate_pdf_path: Path,
+        *,
+        quality: int,
+        scale: float,
+        removable_opaque_smask_refs: frozenset[tuple[int, int]],
+    ) -> int:
+        scale_percent = round(scale * 100)
+        built_candidates.append((scale_percent, quality))
+        # Condition sizes:
+        # Full resolution (scale 100): all exceed target
+        # Downsampled scale 99, quality 70: fits (e.g. 8_000 <= 10_000)
+        # Downsampled scale 99, quality > 70: exceed target (e.g. 12_000 > 10_000)
+        if scale_percent == 99 and quality == 70:
+            size = 8_000
+        else:
+            size = 12_000
+        candidate_pdf_path.write_bytes(b"x" * size)
+        return 1
+
+    monkeypatch.setattr("pdf_size_fit.image_fit._build_candidate", mock_build_candidate)
+    monkeypatch.setattr("pdf_size_fit.image_fit._verify_candidate", lambda *args, **kwargs: None)
+    monkeypatch.setattr("pdf_size_fit.image_fit._find_redundant_opaque_smask_images", lambda p: frozenset())
+
+    events: list[ProgressEvent] = []
+    result = fit_image_heavy_pdf(
+        source,
+        output,
+        target_bytes=target_bytes,
+        min_quality=70,
+        min_scale=0.50,
+        progress_callback=events.append,
+    )
+
+    assert result.status is ImageFitStatus.FITTED
+    assert result.selected_scale == 0.99
+    assert result.selected_quality == 70
+    assert output.exists()
+    # (99, 70) was built during downsample scale scan and must not be rebuilt during search_quality
+    assert built_candidates.count((99, 70)) == 1
+    # Cache hit must not emit duplicate progress event
+    assert len(events) == len(result.attempts)
+    completed_values = [ev.completed for ev in events]
+    assert completed_values == list(range(1, len(events) + 1))
