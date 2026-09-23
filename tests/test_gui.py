@@ -1207,3 +1207,18 @@ def test_app_poll_handles_split_search_progress() -> None:
 
     assert app.busy is True
     assert app.status_var.get() == "PDFを分割する位置を確認しています… 2/6"
+
+
+
+def test_split_success_presentation_uses_actual_custom_target(tmp_path: Path) -> None:
+    import dataclasses
+
+    result = dataclasses.replace(
+        _successful_split_result(tmp_path),
+        target_bytes=5_000_000,
+    )
+
+    presentation = present_split_result(result)
+
+    assert "5MB以下" in presentation.summary
+    assert "10MB以下" not in presentation.summary
