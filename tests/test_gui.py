@@ -1222,3 +1222,23 @@ def test_split_success_presentation_uses_actual_custom_target(tmp_path: Path) ->
 
     assert "5MB以下" in presentation.summary
     assert "10MB以下" not in presentation.summary
+
+
+
+def test_single_page_oversize_presentation_uses_actual_custom_target(
+    tmp_path: Path,
+) -> None:
+    result = SplitResult(
+        status=SplitStatus.SINGLE_PAGE_OVERSIZE,
+        input_path=str(tmp_path / "input.pdf"),
+        input_size_bytes=20_000_000,
+        target_bytes=5_000_000,
+        page_count=3,
+        parts=(),
+        reasons=("page 2 is too large",),
+    )
+
+    presentation = present_split_result(result)
+
+    assert "5MB以下" in presentation.summary
+    assert "10MB以下" not in presentation.summary
