@@ -17,6 +17,13 @@ from .progress import (
     ProgressEvent,
     ProgressPhase,
 )
+from .split import (
+    SourceSnapshot,
+    SplitResult,
+    SplitStatus,
+    capture_source_snapshot,
+    split_pdf,
+)
 
 
 SIMPLE_TARGET_BYTES = 10_000_000
@@ -215,6 +222,24 @@ def run_simple_request(
     return run_request(request, fitter=fitter, progress_callback=progress_callback)
 
 
+def run_split_request(
+    input_path: str | Path,
+    target_bytes: int,
+    source_snapshot: SourceSnapshot,
+    *,
+    splitter: Callable[..., SplitResult] = split_pdf,
+    progress_callback: ProgressCallback | None = None,
+) -> SplitResult:
+    """Execute the separately authorized split mutation request."""
+    kwargs: dict[str, Any] = {
+        "target_bytes": target_bytes,
+        "expected_source_snapshot": source_snapshot,
+    }
+    if progress_callback is not None:
+        kwargs["progress_callback"] = progress_callback
+    return splitter(Path(input_path), **kwargs)
+
+
 def parse_drop_paths(
     data: str,
     splitlist: Callable[[str], Sequence[str]],
@@ -257,6 +282,18 @@ def present_simple_result(result: FitResult) -> ResultPresentation:
             category="already-below-target",
             title=ALREADY_BELOW_MESSAGE,
             summary="出力ファイルは作成していません。",
+            details=details,
+        )
+    if result.status is FitStatus.SPLIT_AVAILABLE:
+        return ResultPresentation(
+            category="split-available",
+            title="PDFを分割できます",
+            summary=(
+                "このPDFは、1ファイルのまま10MB以下にすることが難しいため、"
+                "複数のPDFに分割できます。\n"
+                "各ファイルが10MB以下になるよう自動で分割します。\n"
+                "元のPDFは変更しません。"
+            ),
             details=details,
         )
     if result.status is FitStatus.UNSUPPORTED_MODE:
@@ -322,6 +359,18 @@ def present_result(result: FitResult) -> ResultPresentation:
             ),
             details=details,
         )
+    if result.status is FitStatus.SPLIT_AVAILABLE:
+        return ResultPresentation(
+            category="split-available",
+            title="PDFを分割できます",
+            summary=(
+                "1ファイルでは目標サイズに到達できませんでしたが、"
+                "安全にページ分割できる構造です。\n"
+                "各ファイルが目標サイズ以下になるよう分割できます。\n"
+                "元のPDFは変更しません。"
+            ),
+            details=details,
+        )
     if result.status is FitStatus.UNSUPPORTED_MODE:
         return ResultPresentation(
             category="unsupported-mode",
@@ -364,6 +413,67 @@ def present_result(result: FitResult) -> ResultPresentation:
     )
 
 
+def present_split_result(result: SplitResult) -> ResultPresentation:
+    details = json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
+    if result.status is SplitStatus.SPLIT:
+        first_output = Path(result.parts[0].output_path) if result.parts else None
+        return ResultPresentation(
+            category="split",
+            title=f"PDFを{len(result.parts)}ファイルに分割しました。",
+            summary=(
+                "すべて10MB以下です。\n"
+                "元のPDFは変更していません。\n"
+                + (
+                    f"保存先: {first_output.parent}"
+                    if first_output is not None
+                    else "保存先を確認できませんでした。"
+                )
+            ),
+            details=details,
+            successful_output=first_output,
+        )
+    if result.status is SplitStatus.SINGLE_PAGE_OVERSIZE:
+        return ResultPresentation(
+            category="single-page-oversize",
+            title="自動分割では処理できませんでした。",
+            summary=(
+                "このPDFは、ページ単位に分割しても10MB以下にできない"
+                "ページが含まれています。\n"
+                "元のPDFは変更していません。"
+            ),
+            details=details,
+        )
+    if result.status is SplitStatus.NOT_NEEDED:
+        return ResultPresentation(
+            category="split-not-needed",
+            title="分割は不要です",
+            summary="PDFはすでに目標サイズ以下です。出力ファイルは作成していません。",
+            details=details,
+        )
+    if result.status is SplitStatus.UNSUPPORTED_DOCUMENT:
+        return ResultPresentation(
+            category="split-unsupported",
+            title="安全に分割できませんでした。",
+            summary="ページ分割で保持を保証できない構造があるため、出力していません。",
+            details=details,
+        )
+    return ResultPresentation(
+        category="split-failed",
+        title="PDFの分割に失敗しました。",
+        summary="途中の出力は成功扱いにせず、今回作成したファイルは削除しました。",
+        details=details,
+    )
+
+
+def present_split_cancelled(result: FitResult) -> ResultPresentation:
+    return ResultPresentation(
+        category="split-cancelled",
+        title="分割をキャンセルしました",
+        summary="出力ファイルは作成していません。元のPDFは変更していません。",
+        details=json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
+    )
+
+
 def present_error(error: BaseException) -> ResultPresentation:
     return ResultPresentation(
         category="unexpected-error",
@@ -390,6 +500,7 @@ class _Application:
         ttk: Any,
         filedialog: Any,
         *,
+        messagebox: Any | None = None,
         dnd_files: str | None = None,
         startup_input: str | Path | None = None,
     ) -> None:
@@ -397,6 +508,7 @@ class _Application:
         self.tk = tk
         self.ttk = ttk
         self.filedialog = filedialog
+        self.messagebox = messagebox
         self.events: queue.Queue[tuple[str, Any, bool]] = queue.Queue()
         self.busy = False
         self.successful_output: Path | None = None
@@ -685,6 +797,85 @@ class _Application:
         except BaseException as error:
             self.events.put(("error", error, simple))
 
+    def _offer_split(self, result: FitResult, *, simple: bool) -> None:
+        if self.messagebox is None:
+            self._show(
+                ResultPresentation(
+                    category="split-confirmation-unavailable",
+                    title="分割確認を表示できません",
+                    summary="出力ファイルは作成していません。元のPDFは変更していません。",
+                    details=json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
+                )
+            )
+            return
+
+        approved = self.messagebox.askyesno(
+            "PDFを分割できます",
+            (
+                "このPDFは、1ファイルのまま10MB以下にすることが難しいため、"
+                "複数のPDFに分割できます。\n\n"
+                "各ファイルが10MB以下になるよう自動で分割します。\n"
+                "元のPDFは変更しません。\n\n"
+                "分割しますか？"
+            ),
+            parent=self.root,
+        )
+        if not approved:
+            self._show(present_split_cancelled(result))
+            return
+
+        try:
+            snapshot = capture_source_snapshot(result.input_path)
+        except Exception as error:
+            self._show(present_error(error))
+            return
+        self._begin_split(result, simple=simple, snapshot=snapshot)
+
+    def _begin_split(
+        self,
+        result: FitResult,
+        *,
+        simple: bool,
+        snapshot: SourceSnapshot,
+    ) -> None:
+        self.busy = True
+        self.successful_output = None
+        self.open_button.configure(state="disabled")
+        for control in self.simple_controls + self.advanced_controls:
+            control.configure(state="disabled")
+        self.status_var.set("PDFを分割する位置を確認しています…")
+        self._set_details("")
+        self.progress.stop()
+        self.progress.configure(mode="indeterminate", maximum=100, value=0)
+        self.progress.start(12)
+        threading.Thread(
+            target=self._split_worker,
+            args=(Path(result.input_path), result.target_bytes, snapshot, simple),
+            daemon=True,
+        ).start()
+        self.root.after(100, self._poll)
+
+    def _split_worker(
+        self,
+        input_path: Path,
+        target_bytes: int,
+        snapshot: SourceSnapshot,
+        simple: bool,
+    ) -> None:
+        def on_progress(event: ProgressEvent) -> None:
+            self.events.put(("progress", event, simple))
+
+        try:
+            result = run_split_request(
+                input_path,
+                target_bytes,
+                snapshot,
+                progress_callback=on_progress,
+            )
+            self.events.put(("split-result", result, simple))
+        except BaseException as error:
+            self.events.put(("error", error, simple))
+
     def _poll(self) -> None:
         while True:
             try:
@@ -702,6 +893,8 @@ class _Application:
                     phase_label = "ページを最適化しています…"
                 elif event.phase is ProgressPhase.HIGH_QUALITY_SEARCH:
                     phase_label = "より高い画質を探しています…"
+                elif event.phase is ProgressPhase.SPLIT_SEARCH:
+                    phase_label = "PDFを分割する位置を確認しています…"
                 else:
                     phase_label = "最適化しています…"
                 self.status_var.set(f"{phase_label} {event.completed}/{event.total}")
@@ -716,7 +909,12 @@ class _Application:
             self.progress.configure(mode="indeterminate", maximum=100, value=0)
             for control in self.simple_controls + self.advanced_controls:
                 control.configure(state="normal")
-            if kind == "result":
+            if kind == "result" and value.status is FitStatus.SPLIT_AVAILABLE:
+                self._offer_split(value, simple=simple)
+                return
+            if kind == "split-result":
+                presentation = present_split_result(value)
+            elif kind == "result":
                 presentation = (
                     present_simple_result(value) if simple else present_result(value)
                 )
@@ -766,7 +964,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # GUI dependencies are imported only at startup. Headless CI imports and tests
     # the complete simple workflow without Tk, a graphical display, or Windows DND.
     import tkinter as tk
-    from tkinter import filedialog, ttk
+    from tkinter import filedialog, messagebox, ttk
     from tkinterdnd2 import DND_FILES, TkinterDnD
 
     root = TkinterDnD.Tk()
@@ -775,6 +973,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         tk,
         ttk,
         filedialog,
+        messagebox=messagebox,
         dnd_files=DND_FILES,
         startup_input=args.pdf,
     )
