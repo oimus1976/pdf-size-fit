@@ -24,6 +24,12 @@ from pypdf.generic import (
 )
 
 from .diagnose import Route, diagnose_pdf
+from .progress import (
+    ProgressCallback,
+    ProgressEvent,
+    ProgressPhase,
+    report_progress,
+)
 
 FIXED_COLOR_DPI = 200
 NEAR_BLACK_MAX = 32
@@ -745,6 +751,7 @@ def _build_candidate(
     candidate_path: Path,
     page_specs: tuple[_PageSpec, ...],
     jpeg_quality: int,
+    progress_callback: ProgressCallback | None = None,
 ) -> None:
     import pypdfium2 as pdfium
 
@@ -808,6 +815,14 @@ def _build_candidate(
                 + b"/Im0 Do\nQ\n"
             )
             page.replace_contents(content)
+            report_progress(
+                progress_callback,
+                ProgressEvent(
+                    phase=ProgressPhase.PAGE_OPTIMIZATION,
+                    completed=index + 1,
+                    total=len(page_specs),
+                ),
+            )
     finally:
         pdf.close()
 
@@ -901,6 +916,7 @@ def fit_color_vector_pdf(
     dpi: int = FIXED_COLOR_DPI,
     jpeg_quality: int = 90,
     allow_small_searchable_text_rasterization: bool = False,
+    progress_callback: ProgressCallback | None = None,
 ) -> ColorFitResult:
     if target_bytes <= 0:
         raise ValueError("target_bytes must be greater than zero")
@@ -981,7 +997,13 @@ def fit_color_vector_pdf(
     try:
         with tempfile.TemporaryDirectory(prefix="pdf-size-fit-color-") as temp_dir:
             candidate = Path(temp_dir) / "candidate-200dpi-q90.pdf"
-            _build_candidate(input_path, candidate, page_specs, jpeg_quality)
+            _build_candidate(
+                input_path,
+                candidate,
+                page_specs,
+                jpeg_quality,
+                progress_callback=progress_callback,
+            )
             _verify_candidate(input_path, candidate)
             candidate_size = candidate.stat().st_size
             if candidate_size > target_bytes:

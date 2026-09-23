@@ -14,6 +14,7 @@ from pdf_size_fit.image_first_fit import (
     fit_image_heavy_pdf_first_fit,
 )
 from pdf_size_fit.image_fit import ImageFitStatus, _build_candidate
+from pdf_size_fit.progress import ProgressEvent, ProgressPhase
 from tools.generate_fixtures import generate_image_heavy
 
 
@@ -171,3 +172,123 @@ def test_first_fit_retains_pdfa_fail_closed_gate(tmp_path: Path) -> None:
     assert result.status is ImageFitStatus.PDF_A_UNSUPPORTED
     assert result.attempts == ()
     assert not output.exists()
+
+
+def test_first_fit_emits_progress_events_and_stops_early_on_success(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "source.pdf"
+    probe = tmp_path / "probe-q100.pdf"
+    output = tmp_path / "output.pdf"
+    generate_image_heavy(source, pages=1, image_size=300)
+
+    _build_candidate(source, probe, quality=100, scale=1.0)
+    target = probe.stat().st_size + 1024
+    monkeypatch.setattr(
+        "pdf_size_fit.image_first_fit.diagnose_pdf",
+        lambda *_args, **_kwargs: SimpleNamespace(route=Route.IMAGE_HEAVY),
+    )
+
+    events: list[ProgressEvent] = []
+
+    result = fit_image_heavy_pdf_first_fit(
+        source,
+        output,
+        target_bytes=target,
+        min_quality=70,
+        min_scale=0.50,
+        progress_callback=events.append,
+    )
+
+    assert result.status is ImageFitStatus.FITTED
+    assert len(events) == 1
+    assert events[0] == ProgressEvent(
+        phase=ProgressPhase.IMAGE_OPTIMIZATION,
+        completed=1,
+        total=9,  # 4 quality probes + 5 scale probes = 9 total
+    )
+
+
+def test_first_fit_emits_monotonically_increasing_completed_up_to_total_on_exhaustion(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "output.pdf"
+    generate_image_heavy(source, pages=1, image_size=300)
+
+    events: list[ProgressEvent] = []
+
+    # Very small target forces exhaustion
+    result = fit_image_heavy_pdf_first_fit(
+        source,
+        output,
+        target_bytes=10,
+        min_quality=70,
+        min_scale=0.50,
+        progress_callback=events.append,
+    )
+
+    assert result.status is ImageFitStatus.TARGET_NOT_MET
+    assert len(events) == 9
+    assert [e.completed for e in events] == list(range(1, 10))
+    assert all(e.total == 9 for e in events)
+    assert all(e.phase is ProgressPhase.IMAGE_OPTIMIZATION for e in events)
+
+
+def test_first_fit_callback_exception_does_not_affect_result(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "source.pdf"
+    probe = tmp_path / "probe-q100.pdf"
+    output = tmp_path / "output.pdf"
+    generate_image_heavy(source, pages=1, image_size=300)
+
+    _build_candidate(source, probe, quality=100, scale=1.0)
+    target = probe.stat().st_size + 1024
+    monkeypatch.setattr(
+        "pdf_size_fit.image_first_fit.diagnose_pdf",
+        lambda *_args, **_kwargs: SimpleNamespace(route=Route.IMAGE_HEAVY),
+    )
+
+    def buggy_callback(event: ProgressEvent) -> None:
+        raise RuntimeError("callback explosion")
+
+    result = fit_image_heavy_pdf_first_fit(
+        source,
+        output,
+        target_bytes=target,
+        min_quality=70,
+        min_scale=0.50,
+        progress_callback=buggy_callback,
+    )
+
+    assert result.status is ImageFitStatus.FITTED
+    assert output.exists()
+
+
+def test_first_fit_emits_bounded_four_probes_when_downsampling_disabled(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "output.pdf"
+    generate_image_heavy(source, pages=1, image_size=300)
+
+    events: list[ProgressEvent] = []
+
+    # Very small target forces exhaustion with downsampling disabled
+    result = fit_image_heavy_pdf_first_fit(
+        source,
+        output,
+        target_bytes=10,
+        min_quality=70,
+        min_scale=1.0,
+        progress_callback=events.append,
+    )
+
+    assert result.status is ImageFitStatus.TARGET_NOT_MET
+    assert len(events) == 4
+    assert [e.completed for e in events] == [1, 2, 3, 4]
+    assert all(e.total == 4 for e in events)
+    assert all(e.phase is ProgressPhase.IMAGE_OPTIMIZATION for e in events)
+    assert [attempt.quality for attempt in result.attempts] == [100, 90, 75, 70]
+    assert all(attempt.scale == 1.0 for attempt in result.attempts)

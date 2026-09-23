@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, Callable
 
 import pytest
 
@@ -69,6 +70,27 @@ def _monochrome_result(
         compression="CCITT Group 4",
         page_count=1,
         reasons=(f"monochrome route returned {status.value}",),
+    )
+
+
+def _color_result(
+    input_path: Path,
+    output_path: Path,
+    status: ColorFitStatus = ColorFitStatus.FITTED,
+) -> ColorFitResult:
+    fitted = status is ColorFitStatus.FITTED
+    return ColorFitResult(
+        status=status,
+        input_path=str(input_path),
+        output_path=str(output_path) if fitted else None,
+        input_size_bytes=20_000,
+        output_size_bytes=8_000 if fitted else None,
+        target_bytes=10_000,
+        route=Route.VECTOR_COLOR.value,
+        dpi=FIXED_COLOR_DPI,
+        jpeg_quality=90,
+        page_count=1,
+        reasons=(f"color route returned {status.value}",),
     )
 
 
@@ -322,6 +344,80 @@ def test_preexisting_destination_is_not_overwritten(
         fit_pdf(source, output, target_bytes=10_000)
 
     assert output.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("route", "route_attr", "result_func"),
+    [
+        (Route.IMAGE_HEAVY, "fit_image_heavy_pdf", _image_result),
+        (Route.VECTOR_MONOCHROME, "fit_monochrome_vector_pdf", _monochrome_result),
+        (Route.VECTOR_COLOR, "fit_color_vector_pdf", _color_result),
+    ],
+)
+def test_fit_pdf_forwards_progress_callback(
+    route: Route,
+    route_attr: str,
+    result_func: Callable[[Path, Path], Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.pdf"
+    output = tmp_path / "output.pdf"
+    diagnosis = _diagnosis(source, route)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
+    passed_callback = None
+
+    def mock_route(*args: object, **kwargs: object) -> Any:
+        nonlocal passed_callback
+        passed_callback = kwargs.get("progress_callback")
+        return result_func(source, output)
+
+    monkeypatch.setattr(f"pdf_size_fit.fit.{route_attr}", mock_route)
+
+    dummy_callback = lambda e: None
+    result = fit_pdf(
+        source, output, target_bytes=10_000, progress_callback=dummy_callback
+    )
+
+    assert result.status is FitStatus.FITTED
+    assert passed_callback is dummy_callback
+
+
+@pytest.mark.parametrize(
+    ("route", "route_attr", "result_func"),
+    [
+        (Route.IMAGE_HEAVY, "fit_image_heavy_pdf", _image_result),
+        (Route.VECTOR_MONOCHROME, "fit_monochrome_vector_pdf", _monochrome_result),
+        (Route.VECTOR_COLOR, "fit_color_vector_pdf", _color_result),
+    ],
+)
+def test_fit_pdf_omits_progress_callback_when_none(
+    route: Route,
+    route_attr: str,
+    result_func: Callable[[Path, Path], Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.pdf"
+    output = tmp_path / "output.pdf"
+    diagnosis = _diagnosis(source, route)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
+    passed_kwargs: dict[str, object] = {}
+
+    def mock_route(*args: object, **kwargs: object) -> Any:
+        passed_kwargs.update(kwargs)
+        return result_func(source, output)
+
+    monkeypatch.setattr(f"pdf_size_fit.fit.{route_attr}", mock_route)
+
+    result = fit_pdf(source, output, target_bytes=10_000)
+
+    assert result.status is FitStatus.FITTED
+    assert "progress_callback" not in passed_kwargs
 
 
 def test_vector_color_dispatches_to_color_fit(

@@ -21,6 +21,7 @@ from pdf_size_fit.color_fit import (
     ColorFitStatus,
     fit_color_vector_pdf,
 )
+from pdf_size_fit.progress import ProgressEvent, ProgressPhase
 
 
 def _sha256(path: Path) -> str:
@@ -1068,3 +1069,49 @@ def test_result_helper_without_explicit_jpeg_quality_has_none_default():
         reasons=(),
     )
     assert res.jpeg_quality is None
+
+
+def test_color_emits_page_progress_for_each_page(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "output.pdf"
+    _generate_vector_pdf(
+        source,
+        color=True,
+        page_specs=((595.0, 842.0, 0), (595.0, 842.0, 0), (595.0, 842.0, 0)),
+    )
+
+    events: list[ProgressEvent] = []
+
+    result = fit_color_vector_pdf(
+        source,
+        output,
+        target_bytes=_fit_target(source),
+        progress_callback=events.append,
+    )
+
+    assert result.status is ColorFitStatus.FITTED
+    assert len(events) == 3
+    assert events == [
+        ProgressEvent(phase=ProgressPhase.PAGE_OPTIMIZATION, completed=1, total=3),
+        ProgressEvent(phase=ProgressPhase.PAGE_OPTIMIZATION, completed=2, total=3),
+        ProgressEvent(phase=ProgressPhase.PAGE_OPTIMIZATION, completed=3, total=3),
+    ]
+
+
+def test_color_callback_exception_does_not_affect_result(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "output.pdf"
+    _generate_vector_pdf(source, color=True)
+
+    def buggy_callback(event: ProgressEvent) -> None:
+        raise RuntimeError("color callback error")
+
+    result = fit_color_vector_pdf(
+        source,
+        output,
+        target_bytes=_fit_target(source),
+        progress_callback=buggy_callback,
+    )
+
+    assert result.status is ColorFitStatus.FITTED
+    assert output.exists()

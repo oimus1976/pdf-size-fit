@@ -12,6 +12,11 @@ from typing import Any, Callable, Sequence
 
 from .diagnose import Route
 from .fit import FitResult, FitStatus, fit_pdf
+from .progress import (
+    ProgressCallback,
+    ProgressEvent,
+    ProgressPhase,
+)
 
 
 SIMPLE_TARGET_BYTES = 10_000_000
@@ -142,31 +147,43 @@ def build_simple_request(input_path: str | Path) -> GuiRequest:
 def run_request(
     request: GuiRequest,
     fitter: Callable[..., FitResult] = fit_pdf,
+    progress_callback: ProgressCallback | None = None,
 ) -> FitResult:
     """Map a validated GUI request directly to the integrated backend API."""
+    kwargs: dict[str, Any] = {
+        "target_bytes": request.target_bytes,
+        "min_quality": request.min_quality,
+        "min_scale": request.min_scale,
+        "allow_small_searchable_text_rasterization": (
+            request.allow_small_searchable_text_rasterization
+        ),
+    }
+    if progress_callback is not None:
+        kwargs["progress_callback"] = progress_callback
     return fitter(
         request.input_path,
         request.output_path,
-        target_bytes=request.target_bytes,
-        min_quality=request.min_quality,
-        min_scale=request.min_scale,
-        allow_small_searchable_text_rasterization=(
-            request.allow_small_searchable_text_rasterization
-        ),
+        **kwargs,
     )
 
 
 def run_simple_input(
     input_path: str | Path,
     fitter: Callable[..., FitResult] = fit_pdf,
+    progress_callback: ProgressCallback | None = None,
 ) -> FitResult:
     """Run a picker, GUI-drop, or shell-argument input through one request path."""
-    return run_simple_request(build_simple_request(input_path), fitter=fitter)
+    return run_simple_request(
+        build_simple_request(input_path),
+        fitter=fitter,
+        progress_callback=progress_callback,
+    )
 
 
 def run_simple_request(
     request: GuiRequest,
     fitter: Callable[..., FitResult] = fit_pdf,
+    progress_callback: ProgressCallback | None = None,
 ) -> FitResult:
     """Skip files at the exact simple limit; delegate only oversized PDFs."""
     input_size = request.input_path.stat().st_size
@@ -185,7 +202,7 @@ def run_simple_request(
                 f"{SIMPLE_TARGET_BYTES}; no output was written",
             ),
         )
-    return run_request(request, fitter=fitter)
+    return run_request(request, fitter=fitter, progress_callback=progress_callback)
 
 
 def parse_drop_paths(
@@ -576,6 +593,8 @@ class _Application:
             else "10MB以下になるよう調整しています…"
         )
         self._set_details("")
+        self.progress.stop()
+        self.progress.configure(mode="indeterminate", maximum=100, value=0)
         self.progress.start(12)
         threading.Thread(
             target=self._worker,
@@ -589,30 +608,56 @@ class _Application:
         request: GuiRequest,
         simple: bool,
     ) -> None:
+        def on_progress(event: ProgressEvent) -> None:
+            self.events.put(("progress", event, simple))
+
         try:
-            result = run_simple_request(request) if simple else run_request(request)
+            result = (
+                run_simple_request(request, progress_callback=on_progress)
+                if simple
+                else run_request(request, progress_callback=on_progress)
+            )
             self.events.put(("result", result, simple))
         except BaseException as error:
             self.events.put(("error", error, simple))
 
     def _poll(self) -> None:
-        try:
-            kind, value, simple = self.events.get_nowait()
-        except queue.Empty:
-            if self.busy:
-                self.root.after(100, self._poll)
+        while True:
+            try:
+                kind, value, simple = self.events.get_nowait()
+            except queue.Empty:
+                if self.busy:
+                    self.root.after(100, self._poll)
+                return
+
+            if kind == "progress":
+                event: ProgressEvent = value
+                if event.phase is ProgressPhase.IMAGE_OPTIMIZATION:
+                    phase_label = "画像を最適化しています…"
+                elif event.phase is ProgressPhase.PAGE_OPTIMIZATION:
+                    phase_label = "ページを最適化しています…"
+                else:
+                    phase_label = "最適化しています…"
+                self.status_var.set(f"{phase_label} {event.completed}/{event.total}")
+                self.progress.stop()
+                self.progress.configure(
+                    mode="determinate", maximum=event.total, value=event.completed
+                )
+                continue
+
+            self.busy = False
+            self.progress.stop()
+            self.progress.configure(mode="indeterminate", maximum=100, value=0)
+            for control in self.simple_controls + self.advanced_controls:
+                control.configure(state="normal")
+            if kind == "result":
+                presentation = (
+                    present_simple_result(value) if simple else present_result(value)
+                )
+            else:
+                presentation = present_error(value)
+            self._show(presentation)
             return
-        self.busy = False
-        self.progress.stop()
-        for control in self.simple_controls + self.advanced_controls:
-            control.configure(state="normal")
-        if kind == "result":
-            presentation = (
-                present_simple_result(value) if simple else present_result(value)
-            )
-        else:
-            presentation = present_error(value)
-        self._show(presentation)
 
     def _show(self, presentation: ResultPresentation) -> None:
         self.status_var.set(f"{presentation.title}\n{presentation.summary}")

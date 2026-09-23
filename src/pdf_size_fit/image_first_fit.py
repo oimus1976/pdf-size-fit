@@ -19,6 +19,12 @@ from .image_fit import (
     _has_signature_structure,
     _verify_candidate,
 )
+from .progress import (
+    ProgressCallback,
+    ProgressEvent,
+    ProgressPhase,
+    report_progress,
+)
 
 
 # Standard mode deliberately uses a small probe set. The exact values are
@@ -57,6 +63,7 @@ def fit_image_heavy_pdf_first_fit(
     target_bytes: int = 10_000_000,
     min_quality: int = 70,
     min_scale: float = 1.0,
+    progress_callback: ProgressCallback | None = None,
 ) -> ImageFitResult:
     """Fit an image-heavy PDF using a bounded stop-on-first-success policy.
 
@@ -154,6 +161,8 @@ def fit_image_heavy_pdf_first_fit(
     selected_scale: float | None = None
     removable_opaque_smask_refs: frozenset[tuple[int, int]] = frozenset()
 
+    total_probes = len(_quality_probes(min_quality)) + len(_scale_probes(min_scale))
+
     try:
         with tempfile.TemporaryDirectory(prefix="pdf-size-fit-first-") as temp_dir_name:
             temp_dir = Path(temp_dir_name)
@@ -172,6 +181,14 @@ def fit_image_heavy_pdf_first_fit(
                 size = candidate.stat().st_size
                 attempts.append(
                     ImageFitAttempt(quality=quality, size_bytes=size, scale=scale)
+                )
+                report_progress(
+                    progress_callback,
+                    ProgressEvent(
+                        phase=ProgressPhase.IMAGE_OPTIMIZATION,
+                        completed=len(attempts),
+                        total=total_probes,
+                    ),
                 )
                 return candidate, size, replaced
 

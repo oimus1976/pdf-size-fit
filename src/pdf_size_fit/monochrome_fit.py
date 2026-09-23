@@ -24,6 +24,12 @@ from pypdf.generic import (
 )
 
 from .diagnose import Route, diagnose_pdf
+from .progress import (
+    ProgressCallback,
+    ProgressEvent,
+    ProgressPhase,
+    report_progress,
+)
 
 
 FIXED_DPI = 300
@@ -854,6 +860,7 @@ def _build_candidate(
     input_path: Path,
     candidate_path: Path,
     page_specs: tuple[_PageSpec, ...],
+    progress_callback: ProgressCallback | None = None,
 ) -> None:
     import pypdfium2 as pdfium
 
@@ -909,6 +916,14 @@ def _build_candidate(
                 + b"/Im0 Do\nQ\n"
             )
             page.replace_contents(content)
+            report_progress(
+                progress_callback,
+                ProgressEvent(
+                    phase=ProgressPhase.PAGE_OPTIMIZATION,
+                    completed=index + 1,
+                    total=len(page_specs),
+                ),
+            )
     finally:
         pdf.close()
 
@@ -976,6 +991,7 @@ def fit_monochrome_vector_pdf(
     target_bytes: int = 10_000_000,
     dpi: int = FIXED_DPI,
     allow_small_searchable_text_rasterization: bool = False,
+    progress_callback: ProgressCallback | None = None,
 ) -> MonochromeFitResult:
     if target_bytes <= 0:
         raise ValueError("target_bytes must be greater than zero")
@@ -1050,7 +1066,12 @@ def fit_monochrome_vector_pdf(
     try:
         with tempfile.TemporaryDirectory(prefix="pdf-size-fit-monochrome-") as temp_dir:
             candidate = Path(temp_dir) / "candidate-300dpi-g4.pdf"
-            _build_candidate(input_path, candidate, page_specs)
+            _build_candidate(
+                input_path,
+                candidate,
+                page_specs,
+                progress_callback=progress_callback,
+            )
             _verify_candidate(input_path, candidate)
             candidate_size = candidate.stat().st_size
             if candidate_size > target_bytes:
