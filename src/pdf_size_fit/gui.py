@@ -226,6 +226,7 @@ def run_split_request(
     input_path: str | Path,
     target_bytes: int,
     source_snapshot: SourceSnapshot,
+    output_directory: str | Path | None = None,
     *,
     splitter: Callable[..., SplitResult] = split_pdf,
     progress_callback: ProgressCallback | None = None,
@@ -235,6 +236,8 @@ def run_split_request(
         "target_bytes": target_bytes,
         "expected_source_snapshot": source_snapshot,
     }
+    if output_directory is not None:
+        kwargs["output_directory"] = Path(output_directory)
     if progress_callback is not None:
         kwargs["progress_callback"] = progress_callback
     return splitter(Path(input_path), **kwargs)
@@ -521,6 +524,7 @@ class _Application:
         self.events: queue.Queue[tuple[str, Any, bool]] = queue.Queue()
         self.busy = False
         self.successful_output: Path | None = None
+        self.split_output_directory: Path | None = None
         self.advanced_visible = False
 
         root.title("PDF Size Fit")
@@ -765,6 +769,7 @@ class _Application:
         *,
         simple: bool,
     ) -> None:
+        self.split_output_directory = request.output_path.parent
         self.busy = True
         self.successful_output = None
         self.open_button.configure(state="disabled")
@@ -818,6 +823,12 @@ class _Application:
             )
             return
 
+        try:
+            snapshot = capture_source_snapshot(result.input_path)
+        except Exception as error:
+            self._show(present_error(error))
+            return
+
         target_label = _format_target_label(result.target_bytes)
         approved = self.messagebox.askyesno(
             "PDFを分割できます",
@@ -834,12 +845,16 @@ class _Application:
             self._show(present_split_cancelled(result))
             return
 
-        try:
-            snapshot = capture_source_snapshot(result.input_path)
-        except Exception as error:
-            self._show(present_error(error))
-            return
-        self._begin_split(result, simple=simple, snapshot=snapshot)
+        output_directory = getattr(self, "split_output_directory", None)
+        if output_directory is None:
+            self._begin_split(result, simple=simple, snapshot=snapshot)
+        else:
+            self._begin_split(
+                result,
+                simple=simple,
+                snapshot=snapshot,
+                output_directory=output_directory,
+            )
 
     def _begin_split(
         self,
@@ -847,7 +862,13 @@ class _Application:
         *,
         simple: bool,
         snapshot: SourceSnapshot,
+        output_directory: Path | None = None,
     ) -> None:
+        resolved_output_directory = (
+            Path(result.input_path).parent
+            if output_directory is None
+            else Path(output_directory)
+        )
         self.busy = True
         self.successful_output = None
         self.open_button.configure(state="disabled")
@@ -860,7 +881,13 @@ class _Application:
         self.progress.start(12)
         threading.Thread(
             target=self._split_worker,
-            args=(Path(result.input_path), result.target_bytes, snapshot, simple),
+            args=(
+                Path(result.input_path),
+                result.target_bytes,
+                snapshot,
+                simple,
+                resolved_output_directory,
+            ),
             daemon=True,
         ).start()
         self.root.after(100, self._poll)
@@ -871,16 +898,22 @@ class _Application:
         target_bytes: int,
         snapshot: SourceSnapshot,
         simple: bool,
+        output_directory: Path | None = None,
     ) -> None:
         def on_progress(event: ProgressEvent) -> None:
             self.events.put(("progress", event, simple))
 
         try:
+            split_kwargs: dict[str, Any] = {
+                "progress_callback": on_progress,
+            }
+            if output_directory is not None:
+                split_kwargs["output_directory"] = output_directory
             result = run_split_request(
                 input_path,
                 target_bytes,
                 snapshot,
-                progress_callback=on_progress,
+                **split_kwargs,
             )
             self.events.put(("split-result", result, simple))
         except BaseException as error:
