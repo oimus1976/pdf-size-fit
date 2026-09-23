@@ -13,6 +13,12 @@ from pypdf import PdfReader, PdfWriter
 from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject, StreamObject
 
 from .diagnose import Route, diagnose_pdf
+from .progress import (
+    ProgressCallback,
+    ProgressEvent,
+    ProgressPhase,
+    report_progress,
+)
 
 
 class ImageFitStatus(str, Enum):
@@ -372,6 +378,37 @@ def _quality_probes(min_quality: int) -> tuple[int, ...]:
     return tuple(values)
 
 
+def _max_unique_candidate_builds(min_quality: int, min_scale: float) -> int:
+    coarse = _quality_probes(min_quality)
+    n = len(coarse)
+    max_search_quality_success = 1
+    for k in range(1, n):
+        builds = (k + 1) + (coarse[k - 1] - coarse[k] - 1)
+        if builds > max_search_quality_success:
+            max_search_quality_success = builds
+
+    max_full_res = max(n, max_search_quality_success)
+
+    min_percent = max(1, ceil(min_scale * 100))
+    if min_percent >= 100:
+        return max_full_res
+
+    num_scales = 100 - min_percent
+
+    max_downsampled_refine = 1
+    for k in range(1, n - 1):
+        builds = (k + 1) + (coarse[k - 1] - coarse[k] - 1)
+        if builds > max_downsampled_refine:
+            max_downsampled_refine = builds
+    if n > 1:
+        builds = (n - 1) + (coarse[n - 2] - coarse[n - 1] - 1)
+        if builds > max_downsampled_refine:
+            max_downsampled_refine = builds
+
+    downsampled_total = n + num_scales + max_downsampled_refine
+    return max(max_full_res, downsampled_total)
+
+
 def fit_image_heavy_pdf(
     input_path: str | Path,
     output_path: str | Path,
@@ -379,6 +416,7 @@ def fit_image_heavy_pdf(
     target_bytes: int = 10_000_000,
     min_quality: int = 70,
     min_scale: float = 1.0,
+    progress_callback: ProgressCallback | None = None,
 ) -> ImageFitResult:
     if target_bytes <= 0:
         raise ValueError("target_bytes must be greater than zero")
@@ -450,6 +488,8 @@ def fit_image_heavy_pdf(
     best_scale: float | None = None
     removable_opaque_smask_refs: frozenset[tuple[int, int]] = frozenset()
 
+    total_budget = _max_unique_candidate_builds(min_quality, min_scale)
+
     try:
         with tempfile.TemporaryDirectory(prefix="pdf-size-fit-") as temp_dir_name:
             temp_dir = Path(temp_dir_name)
@@ -475,6 +515,14 @@ def fit_image_heavy_pdf(
                 attempts.append(ImageFitAttempt(quality=quality, size_bytes=size, scale=scale))
                 result = (candidate, size, replaced)
                 cache[cache_key] = result
+                report_progress(
+                    progress_callback,
+                    ProgressEvent(
+                        phase=ProgressPhase.HIGH_QUALITY_SEARCH,
+                        completed=len(attempts),
+                        total=total_budget,
+                    ),
+                )
                 return result
 
             def search_quality(scale_percent: int) -> tuple[Path, int, int, int] | None:

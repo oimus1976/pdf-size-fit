@@ -35,7 +35,7 @@ It returns success without writing output for `skip`, dispatches supported `imag
 
 For `image-heavy` inputs, the integrated standard path uses a bounded stop-on-first-success strategy: full-resolution JPEG quality probes `100 -> 90 -> 75 -> 70`, filtered by any higher configured quality floor. If downsampling has already been explicitly enabled by the caller, it uses a small bounded scale-probe set and stops after the first validated candidate that meets the byte target. Downsampling remains off by default with `min_scale=1.0`.
 
-The route-specific `pdf-size-fit-image` command still uses the existing refinement/best-fit search during this Issue #21 transition. That path is being retained as the basis for a later explicit high-quality mode; the default integrated GUI/backend path is the bounded standard first-fit strategy. Small searchable-text rasterization on the monochrome route remains explicit opt-in, and monochrome rendering remains fixed at 300 dpi.
+The route-specific `pdf-size-fit-image` command and the opt-in integrated high-quality mode (`--mode high-quality`, or GUI checkbox) use the retained refinement/best-fit search for `image-heavy` PDFs, dynamically reporting candidate evaluation progress while enforcing safe parameter bounds (`min_quality >= 70`, `min_scale >= 0.50`). Vector routes safely refuse `high-quality` mode with `unsupported-mode`. The default integrated GUI/backend path remains the bounded standard first-fit strategy. Small searchable-text rasterization on the monochrome route remains explicit opt-in, and monochrome rendering remains fixed at 300 dpi.
 
 ## Windows simple GUI quick start
 

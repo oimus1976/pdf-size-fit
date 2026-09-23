@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
-from .fit import FitStatus, fit_pdf
+from .fit import FitMode, FitStatus, fit_pdf
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -16,6 +16,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("pdf", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument(
+        "--mode",
+        choices=["standard", "high-quality"],
+        default="standard",
+        help="compression mode: standard (default) or high-quality (image-heavy best-fit)",
+    )
     parser.add_argument("--target-bytes", type=int, default=10_000_000)
     parser.add_argument("--min-quality", type=int, default=70)
     parser.add_argument(
@@ -38,15 +44,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args(argv)
 
+    mode = FitMode(args.mode)
+    kwargs: dict[str, Any] = {
+        "target_bytes": args.target_bytes,
+        "min_quality": args.min_quality,
+        "min_scale": args.min_scale,
+        "allow_small_searchable_text_rasterization": (
+            args.allow_small_searchable_text_rasterization
+        ),
+    }
+    if mode is not FitMode.STANDARD:
+        kwargs["mode"] = mode
+
     result = fit_pdf(
         args.pdf,
         args.output,
-        target_bytes=args.target_bytes,
-        min_quality=args.min_quality,
-        min_scale=args.min_scale,
-        allow_small_searchable_text_rasterization=(
-            args.allow_small_searchable_text_rasterization
-        ),
+        **kwargs,
     )
 
     if args.as_json:

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from .diagnose import Route
-from .fit import FitResult, FitStatus, fit_pdf
+from .fit import FitMode, FitResult, FitStatus, fit_pdf
 from .progress import (
     ProgressCallback,
     ProgressEvent,
@@ -37,6 +37,7 @@ class GuiRequest:
     min_quality: int
     min_scale: float
     allow_small_searchable_text_rasterization: bool
+    mode: FitMode = FitMode.STANDARD
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ def build_request(
     min_quality: str,
     min_scale_percent: str,
     allow_small_searchable_text_rasterization: bool,
+    mode: FitMode = FitMode.STANDARD,
 ) -> GuiRequest:
     source = Path(input_path.strip())
     destination = Path(output_path.strip())
@@ -128,10 +130,14 @@ def build_request(
         allow_small_searchable_text_rasterization=bool(
             allow_small_searchable_text_rasterization
         ),
+        mode=mode,
     )
 
 
-def build_simple_request(input_path: str | Path) -> GuiRequest:
+def build_simple_request(
+    input_path: str | Path,
+    mode: FitMode = FitMode.STANDARD,
+) -> GuiRequest:
     """Build the fixed, non-destructive-opt-in request used by every simple input."""
     source = Path(input_path)
     return build_request(
@@ -141,6 +147,7 @@ def build_simple_request(input_path: str | Path) -> GuiRequest:
         str(SIMPLE_MIN_QUALITY),
         str(round(SIMPLE_MIN_SCALE * 100)),
         False,
+        mode=mode,
     )
 
 
@@ -158,6 +165,8 @@ def run_request(
             request.allow_small_searchable_text_rasterization
         ),
     }
+    if request.mode is FitMode.HIGH_QUALITY:
+        kwargs["mode"] = request.mode
     if progress_callback is not None:
         kwargs["progress_callback"] = progress_callback
     return fitter(
@@ -171,10 +180,11 @@ def run_simple_input(
     input_path: str | Path,
     fitter: Callable[..., FitResult] = fit_pdf,
     progress_callback: ProgressCallback | None = None,
+    mode: FitMode = FitMode.STANDARD,
 ) -> FitResult:
     """Run a picker, GUI-drop, or shell-argument input through one request path."""
     return run_simple_request(
-        build_simple_request(input_path),
+        build_simple_request(input_path, mode=mode),
         fitter=fitter,
         progress_callback=progress_callback,
     )
@@ -249,6 +259,16 @@ def present_simple_result(result: FitResult) -> ResultPresentation:
             summary="出力ファイルは作成していません。",
             details=details,
         )
+    if result.status is FitStatus.UNSUPPORTED_MODE:
+        return ResultPresentation(
+            category="unsupported-mode",
+            title="高画質モードに対応していません",
+            summary=(
+                "このPDFでは高画質モードを使用できません。\n"
+                "高画質モードのチェックを外して標準モードでお試しください。"
+            ),
+            details=details,
+        )
     if result.status is FitStatus.UNSUPPORTED_ROUTE:
         return ResultPresentation(
             category="unsupported-route",
@@ -298,6 +318,16 @@ def present_result(result: FitResult) -> ResultPresentation:
             summary=(
                 "入力 PDF はすでに目標サイズ以下です。出力ファイルは作成していません。\n"
                 f"入力サイズ: {_format_size(result.input_size_bytes)}\n"
+                f"診断ルート: {result.route.value}"
+            ),
+            details=details,
+        )
+    if result.status is FitStatus.UNSUPPORTED_MODE:
+        return ResultPresentation(
+            category="unsupported-mode",
+            title="高画質モードに対応していません",
+            summary=(
+                "高画質モードは画像主体のPDFのみ対応しています。標準モードでお試しください。\n"
                 f"診断ルート: {result.route.value}"
             ),
             details=details,
@@ -383,6 +413,7 @@ class _Application:
         self.quality_var = tk.StringVar(value=DEFAULT_MIN_QUALITY)
         self.scale_var = tk.StringVar(value=DEFAULT_MIN_SCALE_PERCENT)
         self.allow_text_var = tk.BooleanVar(value=False)
+        self.high_quality_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="PDFをドロップするか、ファイルを選択してください。")
 
         frame = ttk.Frame(root, padding=20)
@@ -411,6 +442,12 @@ class _Application:
             simple_actions, text="詳細設定", command=self._toggle_advanced
         )
         self.details_button.pack(side="left", padx=8)
+        self.high_quality_check = ttk.Checkbutton(
+            simple_actions,
+            text="高画質モード（通常より時間がかかります）",
+            variable=self.high_quality_var,
+        )
+        self.high_quality_check.pack(side="left", padx=8)
 
         self.progress = ttk.Progressbar(frame, mode="indeterminate")
         self.progress.grid(row=2, column=0, sticky="ew")
@@ -435,9 +472,19 @@ class _Application:
         self.advanced_controls: list[Any] = []
         self._build_advanced_controls()
 
-        self.simple_controls = [self.pick_button, self.details_button, self.drop_target]
+        self.simple_controls = [
+            self.pick_button,
+            self.details_button,
+            self.high_quality_check,
+            self.drop_target,
+        ]
         if startup_input is not None:
-            root.after(0, lambda: self._accept_simple_input(startup_input))
+            root.after(
+                0,
+                lambda: self._accept_simple_input(
+                    startup_input, mode=FitMode.STANDARD
+                ),
+            )
 
     def _build_advanced_controls(self) -> None:
         self.ttk.Label(self.advanced, text="入力 PDF").grid(
@@ -508,6 +555,11 @@ class _Application:
             )
         )
 
+    def _selected_mode(self) -> FitMode:
+        if hasattr(self, "high_quality_var") and self.high_quality_var.get():
+            return FitMode.HIGH_QUALITY
+        return FitMode.STANDARD
+
     def _ask_input(self) -> str:
         return self.filedialog.askopenfilename(
             title="入力 PDF を選択",
@@ -517,7 +569,7 @@ class _Application:
     def _choose_simple_input(self) -> None:
         selected = self._ask_input()
         if selected:
-            self._accept_simple_input(selected)
+            self._accept_simple_input(selected, mode=self._selected_mode())
 
     def _choose_advanced_input(self) -> None:
         selected = self._ask_input()
@@ -547,11 +599,16 @@ class _Application:
                 present_validation_error(ValueError("PDFを1つだけドロップしてください。"))
             )
             return
-        self._accept_simple_input(paths[0])
+        self._accept_simple_input(paths[0], mode=self._selected_mode())
 
-    def _accept_simple_input(self, input_path: str | Path) -> None:
+    def _accept_simple_input(
+        self,
+        input_path: str | Path,
+        mode: FitMode | None = None,
+    ) -> None:
         try:
-            request = build_simple_request(input_path)
+            selected_mode = mode if mode is not None else self._selected_mode()
+            request = build_simple_request(input_path, mode=selected_mode)
         except ValueError as error:
             self._show(present_validation_error(error))
             return
@@ -565,8 +622,13 @@ class _Application:
     def _start_advanced(self) -> None:
         try:
             request = build_request(
-                self.input_var.get(), self.output_var.get(), self.target_var.get(),
-                self.quality_var.get(), self.scale_var.get(), self.allow_text_var.get(),
+                self.input_var.get(),
+                self.output_var.get(),
+                self.target_var.get(),
+                self.quality_var.get(),
+                self.scale_var.get(),
+                self.allow_text_var.get(),
+                mode=self._selected_mode(),
             )
         except ValueError as error:
             self._show(present_validation_error(error))
@@ -587,11 +649,13 @@ class _Application:
         self.open_button.configure(state="disabled")
         for control in self.simple_controls + self.advanced_controls:
             control.configure(state="disabled")
-        self.status_var.set(
-            "PDFを確認しています…"
-            if request.input_path.stat().st_size <= request.target_bytes
-            else "10MB以下になるよう調整しています…"
-        )
+        if request.input_path.stat().st_size <= request.target_bytes:
+            initial_msg = "PDFを確認しています…"
+        elif request.mode is FitMode.HIGH_QUALITY:
+            initial_msg = "より高い画質を探しています…"
+        else:
+            initial_msg = "10MB以下になるよう調整しています…"
+        self.status_var.set(initial_msg)
         self._set_details("")
         self.progress.stop()
         self.progress.configure(mode="indeterminate", maximum=100, value=0)
@@ -636,6 +700,8 @@ class _Application:
                     phase_label = "画像を最適化しています…"
                 elif event.phase is ProgressPhase.PAGE_OPTIMIZATION:
                     phase_label = "ページを最適化しています…"
+                elif event.phase is ProgressPhase.HIGH_QUALITY_SEARCH:
+                    phase_label = "より高い画質を探しています…"
                 else:
                     phase_label = "最適化しています…"
                 self.status_var.set(f"{phase_label} {event.completed}/{event.total}")
@@ -687,6 +753,9 @@ class _Application:
     def _open_folder(self) -> None:
         if self.successful_output is not None:
             os.startfile(str(self.successful_output.parent))
+
+
+PdfSizeFitGui = _Application
 
 
 def main(argv: Sequence[str] | None = None) -> int:

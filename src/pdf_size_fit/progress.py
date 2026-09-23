@@ -8,6 +8,7 @@ from typing import Callable
 class ProgressPhase(str, Enum):
     IMAGE_OPTIMIZATION = "image_optimization"
     PAGE_OPTIMIZATION = "page_optimization"
+    HIGH_QUALITY_SEARCH = "high_quality_search"
 
 
 @dataclass(frozen=True)

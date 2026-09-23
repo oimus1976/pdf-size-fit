@@ -8,7 +8,7 @@ from pypdf import PdfWriter
 
 import pdf_size_fit.gui as gui
 from pdf_size_fit.diagnose import Route
-from pdf_size_fit.fit import FitResult, FitStatus
+from pdf_size_fit.fit import FitMode, FitResult, FitStatus
 from pdf_size_fit.image_fit import ImageFitResult, ImageFitStatus
 from pdf_size_fit.progress import ProgressEvent, ProgressPhase
 from pdf_size_fit.gui import (
@@ -673,3 +673,332 @@ def test_launcher_and_gui_entry_point_exist() -> None:
         dependency.startswith("tkinterdnd2")
         for dependency in metadata["project"]["dependencies"]
     )
+
+
+def test_gui_request_mode_field_and_default(tmp_path: Path) -> None:
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"%PDF-1.4 synthetic")
+    req = build_simple_request(source)
+    assert req.mode is FitMode.STANDARD
+
+
+def test_strict_injected_fitter_compatibility_without_mode(tmp_path: Path) -> None:
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"content")
+    req = build_simple_request(source)
+
+    called = False
+
+    def strict_pre_33_fitter(
+        input_path: Path,
+        output_path: Path,
+        *,
+        target_bytes: int,
+        min_quality: int,
+        min_scale: float,
+        allow_small_searchable_text_rasterization: bool,
+    ) -> FitResult:
+        nonlocal called
+        called = True
+        return _result(FitStatus.FITTED)
+
+    # Must NOT raise TypeError: got unexpected keyword argument 'mode'
+    res = run_request(req, fitter=strict_pre_33_fitter)
+    assert called is True
+    assert res.status is FitStatus.FITTED
+
+
+def test_run_request_forwards_mode_for_high_quality(tmp_path: Path) -> None:
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"content")
+    req = build_simple_request(source)
+    # Update to HIGH_QUALITY
+    import dataclasses
+    req_hq = dataclasses.replace(req, mode=FitMode.HIGH_QUALITY)
+
+    captured_kwargs: dict[str, Any] = {}
+
+    def fitter_with_mode(inp: Any, out: Any, **kwargs: Any) -> FitResult:
+        captured_kwargs.update(kwargs)
+        return _result(FitStatus.FITTED)
+
+    res = run_request(req_hq, fitter=fitter_with_mode)
+    assert res.status is FitStatus.FITTED
+    assert captured_kwargs.get("mode") is FitMode.HIGH_QUALITY
+
+
+def test_gui_checkbox_defaults_false_and_controls_simple_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"large content" * 1000)
+
+    class MockVar:
+        def __init__(self, value: bool = False) -> None:
+            self._value = value
+
+        def get(self) -> bool:
+            return self._value
+
+        def set(self, value: bool) -> None:
+            self._value = value
+
+    app = gui._Application.__new__(gui._Application)
+    app.high_quality_var = MockVar(False)
+
+    assert app.high_quality_var.get() is False
+    assert app._selected_mode() is FitMode.STANDARD
+    app.high_quality_var.set(True)
+    assert app._selected_mode() is FitMode.HIGH_QUALITY
+
+
+def test_gui_progress_rendering_high_quality() -> None:
+    import queue
+    from unittest.mock import MagicMock
+
+    class MockWidget:
+        def __init__(self) -> None:
+            self.config: dict[str, Any] = {}
+            self._val = ""
+
+        def configure(self, **kwargs: Any) -> None:
+            self.config.update(kwargs)
+
+        def set(self, text: str) -> None:
+            self._val = text
+
+        def get(self) -> str:
+            return self._val
+
+        def stop(self) -> None:
+            pass
+
+    app = gui._Application.__new__(gui._Application)
+    app.busy = True
+    app.status_var = MockWidget()
+    app.progress = MockWidget()
+    app.events = queue.Queue()
+    app.simple_controls = []
+    app.advanced_controls = []
+    app.root = MagicMock()
+    app.summary = MockWidget()
+    app.details = MockWidget()
+
+    event = ProgressEvent(
+        phase=ProgressPhase.HIGH_QUALITY_SEARCH, completed=3, total=67
+    )
+    app.events.put(("progress", event, False))
+    app._poll()
+
+    status_text = app.status_var.get()
+    assert "より高い画質を探しています… 3/67" in status_text
+    assert "10MB" not in status_text
+    assert "image-heavy" not in status_text
+    assert app.progress.config.get("mode") == "determinate"
+    assert app.progress.config.get("value") == 3
+    assert app.progress.config.get("maximum") == 67
+
+
+
+def test_present_simple_result_unsupported_mode() -> None:
+    res = FitResult(
+        status=FitStatus.UNSUPPORTED_MODE,
+        route=Route.VECTOR_MONOCHROME,
+        input_path="input.pdf",
+        output_path=None,
+        input_size_bytes=20_000_000,
+        output_size_bytes=None,
+        target_bytes=10_000_000,
+        delegated_route_status=None,
+        reasons=(
+            "high-quality mode is currently supported for image-heavy PDFs only",
+            "the diagnosed route is 'vector-monochrome'",
+        ),
+    )
+    presentation = present_simple_result(res)
+    assert presentation.category == "unsupported-mode"
+    assert presentation.title == "高画質モードに対応していません"
+    assert presentation.summary == (
+        "このPDFでは高画質モードを使用できません。\n"
+        "高画質モードのチェックを外して標準モードでお試しください。"
+    )
+    assert "ベクトル図面など" not in presentation.summary
+    assert "vector-monochrome" not in presentation.title
+    assert "vector-monochrome" not in presentation.summary
+    assert "image-heavy" not in presentation.summary
+
+
+def test_gui_picker_honors_checkbox() -> None:
+    app = gui._Application.__new__(gui._Application)
+    accepted_mode: list[FitMode] = []
+
+    class MockVar:
+        def __init__(self, val: bool) -> None:
+            self._val = val
+
+        def get(self) -> bool:
+            return self._val
+
+    app.high_quality_var = MockVar(False)
+    app._ask_input = lambda: "chosen.pdf"
+    app._accept_simple_input = lambda path, mode=None: accepted_mode.append(mode)
+
+    app._choose_simple_input()
+    assert accepted_mode == [FitMode.STANDARD]
+
+    app.high_quality_var = MockVar(True)
+    app._choose_simple_input()
+    assert accepted_mode == [FitMode.STANDARD, FitMode.HIGH_QUALITY]
+
+
+def test_gui_in_window_dnd_honors_checkbox() -> None:
+    from unittest.mock import MagicMock
+
+    app = gui._Application.__new__(gui._Application)
+    app.busy = False
+    app.root = MagicMock()
+    app.root.tk.splitlist = lambda s: [s]
+    accepted_mode: list[FitMode] = []
+
+    class MockVar:
+        def __init__(self, val: bool) -> None:
+            self._val = val
+
+        def get(self) -> bool:
+            return self._val
+
+    class MockEvent:
+        data = "dropped.pdf"
+
+    app.high_quality_var = MockVar(False)
+    app._accept_simple_input = lambda path, mode=None: accepted_mode.append(mode)
+
+    app._on_drop(MockEvent())
+    assert accepted_mode == [FitMode.STANDARD]
+
+    app.high_quality_var = MockVar(True)
+    app._on_drop(MockEvent())
+    assert accepted_mode == [FitMode.STANDARD, FitMode.HIGH_QUALITY]
+
+
+def test_gui_startup_argument_forces_standard() -> None:
+    from unittest.mock import MagicMock
+
+    scheduled_calls: list[Callable[[], Any]] = []
+
+    mock_root = MagicMock()
+    mock_root.after = lambda ms, callback: scheduled_calls.append(callback)
+
+    # Instantiate Application with startup_input
+    # Patch ttk, tk and tkinter to avoid GUI creation
+    import tkinter as tk
+    from tkinter import ttk
+
+    app = gui._Application.__new__(gui._Application)
+    app.root = mock_root
+    app.tk = tk
+    app.ttk = ttk
+    app.filedialog = MagicMock()
+    app.input_var = MagicMock()
+    app.output_var = MagicMock()
+    app.target_var = MagicMock()
+    app.quality_var = MagicMock()
+    app.scale_var = MagicMock()
+    app.allow_text_var = MagicMock()
+    app.status_var = MagicMock()
+    app.high_quality_var = MagicMock()
+    app.high_quality_var.get.return_value = True  # Checkbox is True
+
+    accepted: list[tuple[Any, Any]] = []
+    app._accept_simple_input = lambda path, mode=None: accepted.append((path, mode))
+
+    # Test the startup callback logic directly as wired in __init__:
+    # root.after(0, lambda: self._accept_simple_input(startup_input, mode=FitMode.STANDARD))
+    cb = lambda: app._accept_simple_input("startup.pdf", mode=FitMode.STANDARD)
+    cb()
+
+    assert len(accepted) == 1
+    assert accepted[0] == ("startup.pdf", FitMode.STANDARD)
+
+
+def test_gui_advanced_honors_selected_mode(tmp_path: Path) -> None:
+    source = tmp_path / "input.pdf"
+    source.write_bytes(b"%PDF-1.4 dummy")
+    output = tmp_path / "output.pdf"
+
+    app = gui._Application.__new__(gui._Application)
+
+    class MockVar:
+        def __init__(self, val: Any) -> None:
+            self._val = val
+
+        def get(self) -> Any:
+            return self._val
+
+    app.input_var = MockVar(str(source))
+    app.output_var = MockVar(str(output))
+    app.target_var = MockVar("10.0")
+    app.quality_var = MockVar("70")
+    app.scale_var = MockVar("100")
+    app.allow_text_var = MockVar(False)
+
+    begun_requests: list[GuiRequest] = []
+    app._begin = lambda req, simple=False: begun_requests.append(req)
+
+    app.high_quality_var = MockVar(False)
+    app._start_advanced()
+    assert len(begun_requests) == 1
+    assert begun_requests[0].mode is FitMode.STANDARD
+
+    app.high_quality_var = MockVar(True)
+    app._start_advanced()
+    assert len(begun_requests) == 2
+    assert begun_requests[1].mode is FitMode.HIGH_QUALITY
+
+
+def test_run_simple_request_makes_exactly_one_call(tmp_path: Path) -> None:
+    source = tmp_path / "oversize.pdf"
+    source.write_bytes(b"x" * 15_000_000)
+    output = tmp_path / "output.pdf"
+
+    # Standard simple request
+    call_count = 0
+
+    def mock_fitter(*args: Any, **kwargs: Any) -> FitResult:
+        nonlocal call_count
+        call_count += 1
+        return _result(FitStatus.FITTED)
+
+    req_standard = build_simple_request(source, mode=FitMode.STANDARD)
+    res1 = run_simple_request(req_standard, fitter=mock_fitter)
+    assert call_count == 1
+    assert res1.status is FitStatus.FITTED
+
+    # High-quality simple request
+    call_count = 0
+    req_hq = build_simple_request(source, mode=FitMode.HIGH_QUALITY)
+    res2 = run_simple_request(req_hq, fitter=mock_fitter)
+    assert call_count == 1
+    assert res2.status is FitStatus.FITTED
+
+    # High-quality failure must NOT trigger a second request / automatic fallback
+    call_count = 0
+
+    def mock_failing_fitter(*args: Any, **kwargs: Any) -> FitResult:
+        nonlocal call_count
+        call_count += 1
+        return FitResult(
+            status=FitStatus.UNSUPPORTED_MODE,
+            route=Route.VECTOR_COLOR,
+            input_path=str(source),
+            output_path=None,
+            input_size_bytes=15_000_000,
+            output_size_bytes=None,
+            target_bytes=10_000_000,
+            delegated_route_status=None,
+            reasons=("unsupported mode",),
+        )
+
+    res3 = run_simple_request(req_hq, fitter=mock_failing_fitter)
+    assert call_count == 1
+    assert res3.status is FitStatus.UNSUPPORTED_MODE

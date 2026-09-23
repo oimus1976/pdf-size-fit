@@ -12,8 +12,12 @@ from .color_fit import (
     ColorFitStatus,
     fit_color_vector_pdf,
 )
-from .image_fit import ImageFitResult, ImageFitStatus
-from .image_first_fit import fit_image_heavy_pdf_first_fit as fit_image_heavy_pdf
+from .image_first_fit import fit_image_heavy_pdf_first_fit
+from .image_fit import (
+    ImageFitResult,
+    ImageFitStatus,
+    fit_image_heavy_pdf as fit_image_heavy_pdf_best_fit,
+)
 from .monochrome_fit import (
     FIXED_DPI,
     MonochromeFitResult,
@@ -23,10 +27,16 @@ from .monochrome_fit import (
 from .progress import ProgressCallback
 
 
+class FitMode(str, Enum):
+    STANDARD = "standard"
+    HIGH_QUALITY = "high-quality"
+
+
 class FitStatus(str, Enum):
     FITTED = "fitted"
     ALREADY_BELOW_TARGET = "already-below-target"
     UNSUPPORTED_ROUTE = "unsupported-route"
+    UNSUPPORTED_MODE = "unsupported-mode"
     ROUTE_FAILED = "route-failed"
 
 
@@ -110,6 +120,7 @@ def fit_pdf(
     output_path: str | Path,
     *,
     target_bytes: int = 10_000_000,
+    mode: FitMode = FitMode.STANDARD,
     min_quality: int = 70,
     min_scale: float = 1.0,
     allow_small_searchable_text_rasterization: bool = False,
@@ -118,6 +129,12 @@ def fit_pdf(
     """Diagnose a PDF and dispatch only to an existing supported safe route."""
     if target_bytes <= 0:
         raise ValueError("target_bytes must be greater than zero")
+
+    if mode is FitMode.HIGH_QUALITY:
+        if min_quality < 70:
+            raise ValueError("min_quality must be at least 70 in high-quality mode")
+        if min_scale < 0.50:
+            raise ValueError("min_scale must be at least 0.50 in high-quality mode")
 
     input_path = Path(input_path)
     output_path = Path(output_path)
@@ -141,15 +158,63 @@ def fit_pdf(
             reasons=diagnosis.reasons,
         )
 
+    if mode is FitMode.HIGH_QUALITY:
+        if diagnosis.route is Route.IMAGE_HEAVY:
+            image_kwargs: dict[str, Any] = {
+                "target_bytes": target_bytes,
+                "min_quality": min_quality,
+                "min_scale": min_scale,
+            }
+            if progress_callback is not None:
+                image_kwargs["progress_callback"] = progress_callback
+            route_result = fit_image_heavy_pdf_best_fit(
+                input_path,
+                output_path,
+                **image_kwargs,
+            )
+            return _normalize_route_result(diagnosis, route_result)
+
+        if diagnosis.route in (Route.VECTOR_MONOCHROME, Route.VECTOR_COLOR):
+            return FitResult(
+                status=FitStatus.UNSUPPORTED_MODE,
+                route=diagnosis.route,
+                input_path=str(input_path),
+                output_path=None,
+                input_size_bytes=diagnosis.file_size_bytes,
+                output_size_bytes=None,
+                target_bytes=target_bytes,
+                delegated_route_status=None,
+                reasons=diagnosis.reasons
+                + (
+                    "high-quality mode is currently supported for image-heavy PDFs only; no output was written",
+                    "please retry using standard mode",
+                ),
+            )
+
+        return FitResult(
+            status=FitStatus.UNSUPPORTED_ROUTE,
+            route=diagnosis.route,
+            input_path=str(input_path),
+            output_path=None,
+            input_size_bytes=diagnosis.file_size_bytes,
+            output_size_bytes=None,
+            target_bytes=target_bytes,
+            delegated_route_status=None,
+            reasons=diagnosis.reasons
+            + (
+                f"route {diagnosis.route.value!r} has no supported execution path; no output was written",
+            ),
+        )
+
     if diagnosis.route is Route.IMAGE_HEAVY:
-        image_kwargs: dict[str, Any] = {
+        image_kwargs = {
             "target_bytes": target_bytes,
             "min_quality": min_quality,
             "min_scale": min_scale,
         }
         if progress_callback is not None:
             image_kwargs["progress_callback"] = progress_callback
-        route_result = fit_image_heavy_pdf(
+        route_result = fit_image_heavy_pdf_first_fit(
             input_path,
             output_path,
             **image_kwargs,
