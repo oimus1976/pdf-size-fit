@@ -499,17 +499,28 @@ def evaluate_split_eligibility(
             reasons=("encrypted PDFs are not supported for page splitting",),
         )
 
-    page_count = len(reader.pages)
     if input_size <= target_bytes:
         return SplitEligibilityResult(
             status=SplitEligibilityStatus.NOT_NEEDED,
             input_path=str(input_path),
             input_size_bytes=input_size,
             target_bytes=target_bytes,
-            page_count=page_count,
+            page_count=0,
             reasons=("input is already at or below the target size",),
         )
 
+    page_specs, refusal = _preflight(reader)
+    if refusal is not None or page_specs is None:
+        return SplitEligibilityResult(
+            status=SplitEligibilityStatus.UNSUPPORTED_DOCUMENT,
+            input_path=str(input_path),
+            input_size_bytes=input_size,
+            target_bytes=target_bytes,
+            page_count=0,
+            reasons=(refusal or "split safety preflight failed closed",),
+        )
+
+    page_count = len(page_specs)
     if page_count < 2:
         return SplitEligibilityResult(
             status=SplitEligibilityStatus.UNSUPPORTED_DOCUMENT,
@@ -520,23 +531,12 @@ def evaluate_split_eligibility(
             reasons=("page splitting requires at least two source pages",),
         )
 
-    page_specs, refusal = _preflight(reader)
-    if refusal is not None or page_specs is None:
-        return SplitEligibilityResult(
-            status=SplitEligibilityStatus.UNSUPPORTED_DOCUMENT,
-            input_path=str(input_path),
-            input_size_bytes=input_size,
-            target_bytes=target_bytes,
-            page_count=page_count,
-            reasons=(refusal or "split safety preflight failed closed",),
-        )
-
     return SplitEligibilityResult(
         status=SplitEligibilityStatus.ELIGIBLE,
         input_path=str(input_path),
         input_size_bytes=input_size,
         target_bytes=target_bytes,
-        page_count=len(page_specs),
+        page_count=page_count,
         reasons=(
             "document passed the strict page-splitting safety preflight",
             "page splitting still requires explicit user approval",
