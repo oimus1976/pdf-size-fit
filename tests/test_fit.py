@@ -842,6 +842,12 @@ def test_fit_pdf_high_quality_delegated_failure_returns_route_failed(
         return _image_result(source, output, status=ImageFitStatus.TARGET_NOT_MET)
 
     monkeypatch.setattr("pdf_size_fit.fit.fit_image_heavy_pdf_best_fit", mock_failed_best_fit)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.evaluate_split_eligibility",
+        lambda *args, **kwargs: _split_eligibility(
+            source, SplitEligibilityStatus.UNSUPPORTED_DOCUMENT
+        ),
+    )
 
     result = fit_pdf(source, output, target_bytes=10_000, mode=FitMode.HIGH_QUALITY)
 
