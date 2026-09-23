@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-09-20
+Last updated: 2026-09-23
 
 ## Current phase
 
@@ -16,7 +16,11 @@ The backend provides one `fit_pdf` API and one `pdf-size-fit` command that accep
 
 For `image-heavy`, the standard integrated path uses a bounded first-fit policy: full-resolution JPEG quality probes `100 -> 90 -> 75 -> 70`, respecting any higher configured quality floor, and stopping after the first validated candidate that meets the target. Explicitly enabled downsampling uses a small bounded scale-probe set. An explicit opt-in high-quality mode (`FitMode.HIGH_QUALITY`, `--mode high-quality`, or GUI checkbox) uses the retained refinement/best-fit search for `image-heavy` PDFs with dynamic candidate progress reporting while enforcing safe parameter floors (`min_quality >= 70`, `min_scale >= 0.50`). Vector routes safely refuse high-quality mode (`unsupported-mode`).
 
-Page splitting is not implemented yet.
+The integrated backend now has a safe page-splitting fallback. Only an ordinary delegated `target-not-met` result is evaluated for splitting; hard refusals remain terminal. A successful strict split preflight promotes the integrated result to `split-available`, but no split mutation occurs until the user explicitly approves it. Split execution reruns the safety preflight and checks that the source has not changed since approval.
+
+The split engine writes page subsets from the original source into temporary storage, measures actual output sizes, and from each current start page chooses the longest contiguous range that fits the target. It does not rely on equal-page-count heuristics or size monotonicity. Every selected staged part and every published final part is reopened and checked for page range geometry and PDFium renderability. Final names use collision-safe groups such as `name-part-1.pdf` or `name-split-2-part-1.pdf`; existing files are never overwritten. Publication failures roll back final files created by that operation, while temporary candidates are removed with their temporary directory.
+
+Split eligibility is intentionally strict: encrypted PDFs, signatures/certification, PDF/A identification, any AcroForm, annotations, outlines/bookmarks, names/destinations/actions/page labels/threads/tag structure/optional-content collections, embedded or associated files, unsupported page geometry, malformed raw page trees, and unknown catalog/page semantics fail closed. The current range-search upper bound is `N * (N + 1) / 2` unique contiguous ranges for an N-page source; this is a correctness-first PoC policy rather than a claim of globally optimal partitioning.
 
 `skip` succeeds without creating output; `unclassified` remains unsupported and fails closed without creating output. Delegated refusals and target failures are normalized as non-success while retaining route-specific evidence. Image downsampling still defaults off at `min_scale=1.0`, monochrome rendering remains fixed at 300 dpi, and small searchable-text rasterization remains explicit opt-in and off by default. The integration does not overwrite inputs or existing destinations, delete originals, or introduce a product-wide target safety margin.
 
@@ -28,7 +32,7 @@ Simple mode fixes the boundary at exactly `10_000_000` bytes. Files at or below 
 
 Quality, image scale, route, and backend evidence are absent from the default view. The prior development controls remain behind `詳細設定`. Simple requests automatically use a bounded image scale floor of `min_scale=0.50` with `min_quality=70` in a single backend request, while searchable-text rasterization remains disabled (`allow_small_searchable_text_rasterization=False`). Advanced GUI default scale remains 100% (`min_scale=1.0`), and direct API/CLI defaults remain unchanged unless explicitly configured. Processing remains on a worker thread and successful runs retain `フォルダーを開く`.
 
-When simple mode produces output and image reduction occurred (`selected_scale < 1.0`), the UI reports the selected scale and quality and warns about possible quality loss. Full-resolution success does not claim image reduction. Target exhaustion in simple mode uses route-neutral wording (`10MB以下にできませんでした。`) and leaves no output file. All structural and `/SMask` fail-closed checks remain authoritative.
+When simple mode produces output and image reduction occurred (`selected_scale < 1.0`), the UI reports the selected scale and quality and warns about possible quality loss. Full-resolution success does not claim image reduction. If target exhaustion is split-eligible, the first worker request ends and the Tk/UI thread displays the split confirmation; only `分割する` starts a second worker/backend request. Cancellation makes no split request. Ineligible target exhaustion retains route-neutral no-output wording. All structural and `/SMask` fail-closed checks remain authoritative.
 
 Tkinter and Tk D&D integration are imported only at GUI startup. Headless tests cover the fixed boundary, no-op behavior, collision naming, immutable destinations, backend argument mapping, D&D parsing, shell/drop path convergence, and simple presentation without starting Tk or requiring a display. GitHub Actions runs the full suite on both Ubuntu and Windows for Python 3.11 and 3.12.
 
