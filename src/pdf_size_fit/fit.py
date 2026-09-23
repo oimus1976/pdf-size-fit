@@ -25,6 +25,7 @@ from .monochrome_fit import (
     fit_monochrome_vector_pdf,
 )
 from .progress import ProgressCallback
+from .split import SplitEligibilityStatus, evaluate_split_eligibility
 
 
 class FitMode(str, Enum):
@@ -38,6 +39,7 @@ class FitStatus(str, Enum):
     UNSUPPORTED_ROUTE = "unsupported-route"
     UNSUPPORTED_MODE = "unsupported-mode"
     ROUTE_FAILED = "route-failed"
+    SPLIT_AVAILABLE = "split-available"
 
 
 RouteResult = ImageFitResult | MonochromeFitResult | ColorFitResult
@@ -115,6 +117,36 @@ def _normalize_route_result(diagnosis: Diagnosis, result: RouteResult) -> FitRes
     )
 
 
+def _with_split_availability(result: FitResult) -> FitResult:
+    if (
+        result.status is not FitStatus.ROUTE_FAILED
+        or result.delegated_route_status != "target-not-met"
+    ):
+        return result
+
+    eligibility = evaluate_split_eligibility(
+        result.input_path,
+        target_bytes=result.target_bytes,
+    )
+    status = (
+        FitStatus.SPLIT_AVAILABLE
+        if eligibility.status is SplitEligibilityStatus.ELIGIBLE
+        else FitStatus.ROUTE_FAILED
+    )
+    return FitResult(
+        status=status,
+        route=result.route,
+        input_path=result.input_path,
+        output_path=None,
+        input_size_bytes=result.input_size_bytes,
+        output_size_bytes=None,
+        target_bytes=result.target_bytes,
+        delegated_route_status=result.delegated_route_status,
+        reasons=result.reasons + eligibility.reasons,
+        route_result=result.route_result,
+    )
+
+
 def fit_pdf(
     input_path: str | Path,
     output_path: str | Path,
@@ -175,7 +207,7 @@ def fit_pdf(
                 output_path,
                 **image_kwargs,
             )
-            return _normalize_route_result(diagnosis, route_result)
+            return _with_split_availability(_normalize_route_result(diagnosis, route_result))
 
         if diagnosis.route in (Route.VECTOR_MONOCHROME, Route.VECTOR_COLOR):
             return FitResult(
@@ -222,7 +254,7 @@ def fit_pdf(
             output_path,
             **image_kwargs,
         )
-        return _normalize_route_result(diagnosis, route_result)
+        return _with_split_availability(_normalize_route_result(diagnosis, route_result))
 
     if diagnosis.route is Route.VECTOR_MONOCHROME:
         mono_kwargs: dict[str, Any] = {
@@ -239,7 +271,7 @@ def fit_pdf(
             output_path,
             **mono_kwargs,
         )
-        return _normalize_route_result(diagnosis, route_result)
+        return _with_split_availability(_normalize_route_result(diagnosis, route_result))
 
     if diagnosis.route is Route.VECTOR_COLOR:
         color_kwargs: dict[str, Any] = {
@@ -257,7 +289,7 @@ def fit_pdf(
             output_path,
             **color_kwargs,
         )
-        return _normalize_route_result(diagnosis, route_result)
+        return _with_split_availability(_normalize_route_result(diagnosis, route_result))
 
     return FitResult(
         status=FitStatus.UNSUPPORTED_ROUTE,
