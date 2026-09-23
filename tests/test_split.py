@@ -16,6 +16,7 @@ from pdf_size_fit.progress import ProgressEvent, ProgressPhase
 from pdf_size_fit.split import (
     SplitEligibilityStatus,
     SplitStatus,
+    capture_source_snapshot,
     evaluate_split_eligibility,
     split_pdf,
 )
@@ -307,5 +308,48 @@ def test_progress_process_control_exceptions_propagate(
 
     with pytest.raises(exc_type):
         split_pdf(source, target_bytes=500, progress_callback=control_callback)
+
+    assert not list(tmp_path.glob("source-part-*.pdf"))
+
+
+
+def test_expected_source_snapshot_mismatch_refuses_before_mutation(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    _write_blank_pdf(source, pages=3)
+    snapshot = capture_source_snapshot(source)
+    source.write_bytes(source.read_bytes() + b"changed")
+
+    with pytest.raises(RuntimeError, match="source PDF changed"):
+        split_pdf(
+            source,
+            target_bytes=500,
+            expected_source_snapshot=snapshot,
+        )
+
+    assert not list(tmp_path.glob("source-part-*.pdf"))
+
+
+def test_unexpected_final_validation_failure_rolls_back_all_published_parts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.pdf"
+    _write_blank_pdf(source, pages=3)
+
+    def fail_on_final(
+        input_path: Path,
+        candidate_path: Path,
+        page_start: int,
+        page_end: int,
+    ) -> None:
+        if candidate_path.parent == tmp_path and "-part-" in candidate_path.name:
+            raise RuntimeError("synthetic final validation failure")
+
+    monkeypatch.setattr(split_module, "_validate_subset", fail_on_final)
+
+    with pytest.raises(RuntimeError, match="synthetic final validation failure"):
+        split_pdf(source, target_bytes=500)
 
     assert not list(tmp_path.glob("source-part-*.pdf"))
