@@ -8,6 +8,11 @@ The project is currently experimental and does not yet use formal releases.
 
 ### Added
 
+- Safe page-splitting fallback for ordinary `target-not-met` results, with a dedicated strict eligibility preflight, explicit user approval, actual-output-size range search, per-part reopen/render validation, collision-safe group naming, and rollback cleanup (Issue #35).
+- Split execution API and result contracts (`SplitEligibilityStatus`, `SplitStatus`, `SplitPart`, `split_pdf`) plus source-snapshot checks that reject a PDF changed between approval and mutation.
+- Split-search progress reporting (`ProgressPhase.SPLIT_SEARCH`) with a fixed `N * (N + 1) / 2` unique-range upper bound and observational callback semantics.
+- GUI split confirmation on the Tk/UI thread followed by a separate worker/backend mutation request only after the user chooses `分割する`; cancellation performs no split request.
+
 - Explicit opt-in high-quality best-fit mode (`FitMode.HIGH_QUALITY`, `--mode high-quality`, or GUI checkbox) for `image-heavy` PDFs, exploring the candidate space with dynamic progress reporting while preserving the standard bounded first-fit workflow as default (Issue #33).
 - Safe parameter floor enforcement (`min_quality >= 70`, `min_scale >= 0.50`) and fail-closed `unsupported-mode` status when high-quality mode is requested for vector routes.
 - Candidate evaluation progress reporting (`ProgressPhase.HIGH_QUALITY_SEARCH`) for image best-fit with dynamic candidate budget derivation based on configured quality and scale floors.
@@ -72,6 +77,10 @@ The project is currently experimental and does not yet use formal releases.
 
 ### Changed
 
+- Integrated fitting now promotes only delegated `target-not-met` results that pass split preflight to `FitStatus.SPLIT_AVAILABLE`; hard refusals never enter split eligibility.
+- Page splitting chooses the largest fitting contiguous range from each current start page by measuring real emitted PDFs from longest to shortest. It does not assume file-size monotonicity or claim a global minimum-partition optimum.
+- Split publication stages and validates all selected parts before exclusively creating final names; known publication failures and unexpected final-validation failures remove every final file created by the operation.
+
 - Simple mode in GUI now performs downsampling automatically in a single request with `min_scale=0.50` rather than using a two-request confirmation fallback flow. Advanced GUI default scale remains 100% (`min_scale=1.0`), and direct API/CLI defaults remain unchanged.
 - The integrated image-heavy `fit_pdf` path now uses a bounded standard first-fit search (`100 -> 90 -> 75 -> 70`, subject to the configured quality floor) and stops after the first validated candidate that meets the target. The route-specific `pdf-size-fit-image` fitter retains its existing refinement/best-fit behavior for the later explicit high-quality mode.
 
@@ -96,9 +105,13 @@ The project is currently experimental and does not yet use formal releases.
 - Monochrome structural preflight now walks the raw `/Pages` tree before flattened pages are trusted, rejecting unknown node/leaf semantics, malformed types/counts/parent links, identity uncertainty, repeated nodes/cycles/duplicate leaves, and raw-to-flattened order disagreement.
 - Monochrome destructive safety now rejects any fixed-300-dpi RGB pixel with channel spread at least 16 before the separate grayscale/bilevel inspection; no area-percentage threshold is used, and candidate rendering remains `grayscale=True` then `.convert("1")`.
 - Simple mode now refuses to call the fitting backend for inputs at or below 10,000,000 bytes and never silently enables image downsampling or searchable-text rasterization.
-- The simple workflow still begins at `min_scale=1.0`; only explicit confirmation after its eligible image-heavy failure relaxes the floor to `0.50`, while preserving target 10,000,000 bytes, minimum JPEG quality 70, searchable-text rasterization off, collision-safe output, and existing fail-closed safeguards.
+- The simple compression request uses the existing automatic bounded downsampling floor of `min_scale=0.50`; user confirmation is now reserved for the separate page-splitting fallback after an eligible `target-not-met` result.
 
 ### Notes
+
+- Page splitting is deliberately fail-closed for signatures/certification, PDF/A identification, AcroForm, annotations, outlines, named/document-level navigation semantics, embedded or associated files, unsupported page geometry, and unknown catalog/page-tree/page semantics.
+- The split range search has a quadratic worst-case candidate bound. The current correctness-first policy intentionally avoids binary search because emitted PDF size is not assumed monotonic across page ranges.
+- Multi-file publication is exception-safe with rollback but is not described as a filesystem-level atomic commit across power/process failure.
 
 - The application source is licensed under the MIT License; bundled third-party components retain their respective licenses.
 - No production compression engine, installer, or release artifact exists yet; the GUI remains a source-checkout Stage 1 implementation.
