@@ -1090,7 +1090,9 @@ def test_run_split_request_forwards_snapshot_and_progress(
     assert captured["progress_callback"] is callback
 
 
-def test_split_offer_cancel_does_not_start_second_backend_request() -> None:
+def test_split_offer_cancel_does_not_start_second_backend_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from unittest.mock import MagicMock
 
     app = gui._Application.__new__(gui._Application)
@@ -1102,6 +1104,11 @@ def test_split_offer_cancel_does_not_start_second_backend_request() -> None:
     result = _result(
         FitStatus.SPLIT_AVAILABLE,
         delegated_route_status="target-not-met",
+    )
+    monkeypatch.setattr(
+        gui,
+        "capture_source_snapshot",
+        lambda path: SourceSnapshot(size_bytes=20_000_000, mtime_ns=456),
     )
 
     app._offer_split(result, simple=True)
