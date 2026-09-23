@@ -387,3 +387,25 @@ def test_split_eligibility_validates_raw_tree_before_flattened_pages(
     assert result.page_count == 2
     assert preflight_ran is True
 
+
+
+@pytest.mark.parametrize("exc_type", [KeyboardInterrupt, SystemExit])
+def test_process_control_exception_during_final_copy_cleans_partial_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exc_type: type[BaseException],
+) -> None:
+    source = tmp_path / "source.pdf"
+    _write_blank_pdf(source, pages=2)
+
+    def interrupted_copy(input_file: object, output_file: object) -> None:
+        output_file.write(b"partial-final-output")
+        output_file.flush()
+        raise exc_type()
+
+    monkeypatch.setattr(split_module.shutil, "copyfileobj", interrupted_copy)
+
+    with pytest.raises(exc_type):
+        split_pdf(source, target_bytes=500)
+
+    assert not list(tmp_path.glob("source-part-*.pdf"))
