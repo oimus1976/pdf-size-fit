@@ -353,3 +353,37 @@ def test_unexpected_final_validation_failure_rolls_back_all_published_parts(
         split_pdf(source, target_bytes=500)
 
     assert not list(tmp_path.glob("source-part-*.pdf"))
+
+def test_split_eligibility_validates_raw_tree_before_flattened_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"x" * 101)
+    preflight_ran = False
+
+    class GuardedReader:
+        is_encrypted = False
+
+        @property
+        def pages(self) -> list[object]:
+            if not preflight_ran:
+                raise AssertionError(
+                    "flattened pages were trusted before strict split preflight"
+                )
+            return [object(), object()]
+
+    def fake_preflight(reader: object) -> tuple[tuple[object, ...], None]:
+        nonlocal preflight_ran
+        preflight_ran = True
+        return ((object(), object()), None)
+
+    monkeypatch.setattr(split_module, "PdfReader", lambda *args, **kwargs: GuardedReader())
+    monkeypatch.setattr(split_module, "_preflight", fake_preflight)
+
+    result = evaluate_split_eligibility(source, target_bytes=100)
+
+    assert result.status is SplitEligibilityStatus.ELIGIBLE
+    assert result.page_count == 2
+    assert preflight_ran is True
+
