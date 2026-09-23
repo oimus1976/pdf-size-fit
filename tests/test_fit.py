@@ -12,6 +12,7 @@ from pdf_size_fit.fit_cli import main
 from pdf_size_fit.image_fit import ImageFitResult, ImageFitStatus
 from pdf_size_fit.color_fit import ColorFitResult, ColorFitStatus, FIXED_COLOR_DPI
 from pdf_size_fit.monochrome_fit import MonochromeFitResult, MonochromeFitStatus
+from pdf_size_fit.split import SplitEligibilityResult, SplitEligibilityStatus
 
 
 def _diagnosis(path: Path, route: Route, *, target_bytes: int = 10_000) -> Diagnosis:
@@ -847,3 +848,141 @@ def test_fit_pdf_high_quality_delegated_failure_returns_route_failed(
     assert result.status is FitStatus.ROUTE_FAILED
     assert result.delegated_route_status == ImageFitStatus.TARGET_NOT_MET.value
     assert result.output_path is None
+
+
+
+def _split_eligibility(
+    source: Path,
+    status: SplitEligibilityStatus,
+) -> SplitEligibilityResult:
+    return SplitEligibilityResult(
+        status=status,
+        input_path=str(source),
+        input_size_bytes=20_000,
+        target_bytes=10_000,
+        page_count=3,
+        reasons=(f"split eligibility returned {status.value}",),
+    )
+
+
+def test_fit_pdf_target_not_met_becomes_split_available_only_when_eligible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "input.pdf"
+    output = tmp_path / "output.pdf"
+    diagnosis = _diagnosis(source, Route.IMAGE_HEAVY)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.fit_image_heavy_pdf_first_fit",
+        lambda *args, **kwargs: _image_result(
+            source, output, status=ImageFitStatus.TARGET_NOT_MET
+        ),
+    )
+    calls = 0
+
+    def eligible(*args: Any, **kwargs: Any) -> SplitEligibilityResult:
+        nonlocal calls
+        calls += 1
+        return _split_eligibility(source, SplitEligibilityStatus.ELIGIBLE)
+
+    monkeypatch.setattr("pdf_size_fit.fit.evaluate_split_eligibility", eligible)
+
+    result = fit_pdf(source, output, target_bytes=10_000)
+
+    assert calls == 1
+    assert result.status is FitStatus.SPLIT_AVAILABLE
+    assert result.delegated_route_status == ImageFitStatus.TARGET_NOT_MET.value
+    assert result.output_path is None
+    assert result.route_result is not None
+    assert any("eligible" in reason for reason in result.reasons)
+
+
+def test_fit_pdf_target_not_met_stays_failed_when_split_is_not_eligible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "input.pdf"
+    output = tmp_path / "output.pdf"
+    diagnosis = _diagnosis(source, Route.IMAGE_HEAVY)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.fit_image_heavy_pdf_first_fit",
+        lambda *args, **kwargs: _image_result(
+            source, output, status=ImageFitStatus.TARGET_NOT_MET
+        ),
+    )
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.evaluate_split_eligibility",
+        lambda *args, **kwargs: _split_eligibility(
+            source, SplitEligibilityStatus.UNSUPPORTED_DOCUMENT
+        ),
+    )
+
+    result = fit_pdf(source, output, target_bytes=10_000)
+
+    assert result.status is FitStatus.ROUTE_FAILED
+    assert result.delegated_route_status == ImageFitStatus.TARGET_NOT_MET.value
+    assert any("unsupported-document" in reason for reason in result.reasons)
+
+
+def test_fit_pdf_hard_refusal_never_enters_split_eligibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "input.pdf"
+    output = tmp_path / "output.pdf"
+    diagnosis = _diagnosis(source, Route.IMAGE_HEAVY)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.fit_image_heavy_pdf_first_fit",
+        lambda *args, **kwargs: _image_result(
+            source, output, status=ImageFitStatus.SIGNED_PDF_UNSUPPORTED
+        ),
+    )
+
+    def unexpected(*args: Any, **kwargs: Any) -> SplitEligibilityResult:
+        pytest.fail("hard refusal must not enter split eligibility")
+
+    monkeypatch.setattr("pdf_size_fit.fit.evaluate_split_eligibility", unexpected)
+
+    result = fit_pdf(source, output, target_bytes=10_000)
+
+    assert result.status is FitStatus.ROUTE_FAILED
+    assert result.delegated_route_status == ImageFitStatus.SIGNED_PDF_UNSUPPORTED.value
+
+
+def test_fit_pdf_high_quality_target_not_met_can_become_split_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "input.pdf"
+    output = tmp_path / "output.pdf"
+    diagnosis = _diagnosis(source, Route.IMAGE_HEAVY)
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.diagnose_pdf", lambda *args, **kwargs: diagnosis
+    )
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.fit_image_heavy_pdf_best_fit",
+        lambda *args, **kwargs: _image_result(
+            source, output, status=ImageFitStatus.TARGET_NOT_MET
+        ),
+    )
+    monkeypatch.setattr(
+        "pdf_size_fit.fit.evaluate_split_eligibility",
+        lambda *args, **kwargs: _split_eligibility(
+            source, SplitEligibilityStatus.ELIGIBLE
+        ),
+    )
+
+    result = fit_pdf(
+        source,
+        output,
+        target_bytes=10_000,
+        mode=FitMode.HIGH_QUALITY,
+    )
+
+    assert result.status is FitStatus.SPLIT_AVAILABLE
+    assert result.delegated_route_status == ImageFitStatus.TARGET_NOT_MET.value
