@@ -11,6 +11,7 @@ from pdf_size_fit.diagnose import Route
 from pdf_size_fit.fit import FitMode, FitResult, FitStatus
 from pdf_size_fit.image_fit import ImageFitResult, ImageFitStatus
 from pdf_size_fit.progress import ProgressEvent, ProgressPhase
+from pdf_size_fit.split import SourceSnapshot, SplitPart, SplitResult, SplitStatus
 from pdf_size_fit.gui import (
     ALREADY_BELOW_MESSAGE,
     GuiRequest,
@@ -23,6 +24,8 @@ from pdf_size_fit.gui import (
     present_error,
     present_result,
     present_simple_result,
+    present_split_result,
+    run_split_request,
     run_request,
     run_simple_input,
     run_simple_request,
@@ -1002,3 +1005,205 @@ def test_run_simple_request_makes_exactly_one_call(tmp_path: Path) -> None:
     res3 = run_simple_request(req_hq, fitter=mock_failing_fitter)
     assert call_count == 1
     assert res3.status is FitStatus.UNSUPPORTED_MODE
+
+
+
+def _successful_split_result(tmp_path: Path) -> SplitResult:
+    first = tmp_path / "input-part-1.pdf"
+    second = tmp_path / "input-part-2.pdf"
+    return SplitResult(
+        status=SplitStatus.SPLIT,
+        input_path=str(tmp_path / "input.pdf"),
+        input_size_bytes=20_000_000,
+        target_bytes=10_000_000,
+        page_count=4,
+        parts=(
+            SplitPart(
+                part_number=1,
+                page_start=1,
+                page_end=2,
+                output_path=str(first),
+                size_bytes=9_000_000,
+            ),
+            SplitPart(
+                part_number=2,
+                page_start=3,
+                page_end=4,
+                output_path=str(second),
+                size_bytes=8_000_000,
+            ),
+        ),
+        reasons=("split complete",),
+    )
+
+
+def test_split_available_presentation_explicitly_offers_split() -> None:
+    result = _result(
+        FitStatus.SPLIT_AVAILABLE,
+        delegated_route_status="target-not-met",
+    )
+
+    presentation = present_simple_result(result)
+
+    assert presentation.category == "split-available"
+    assert "分割" in presentation.title + presentation.summary
+    assert "元のPDFは変更しません" in presentation.summary
+    assert presentation.successful_output is None
+
+
+def test_split_success_presentation_reports_all_parts(tmp_path: Path) -> None:
+    presentation = present_split_result(_successful_split_result(tmp_path))
+
+    assert presentation.category == "split"
+    assert "2ファイル" in presentation.title
+    assert "すべて10MB以下" in presentation.summary
+    assert "元のPDFは変更していません" in presentation.summary
+    assert presentation.successful_output == tmp_path / "input-part-1.pdf"
+
+
+def test_run_split_request_forwards_snapshot_and_progress(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.pdf"
+    source.write_bytes(b"synthetic")
+    snapshot = SourceSnapshot(size_bytes=9, mtime_ns=123)
+    captured: dict[str, object] = {}
+
+    def splitter(input_path: Path, **kwargs: object) -> SplitResult:
+        captured["input_path"] = input_path
+        captured.update(kwargs)
+        return _successful_split_result(tmp_path)
+
+    callback = lambda event: None
+    result = run_split_request(
+        source,
+        10_000_000,
+        snapshot,
+        splitter=splitter,
+        progress_callback=callback,
+    )
+
+    assert result.status is SplitStatus.SPLIT
+    assert captured["input_path"] == source
+    assert captured["target_bytes"] == 10_000_000
+    assert captured["expected_source_snapshot"] == snapshot
+    assert captured["progress_callback"] is callback
+
+
+def test_split_offer_cancel_does_not_start_second_backend_request() -> None:
+    from unittest.mock import MagicMock
+
+    app = gui._Application.__new__(gui._Application)
+    app.root = MagicMock()
+    app.messagebox = MagicMock()
+    app.messagebox.askyesno.return_value = False
+    app._begin_split = MagicMock()
+    app._show = MagicMock()
+    result = _result(
+        FitStatus.SPLIT_AVAILABLE,
+        delegated_route_status="target-not-met",
+    )
+
+    app._offer_split(result, simple=True)
+
+    app._begin_split.assert_not_called()
+    shown = app._show.call_args.args[0]
+    assert shown.category == "split-cancelled"
+    assert "キャンセル" in shown.title
+
+
+def test_split_offer_approval_starts_second_request_with_fresh_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock
+
+    app = gui._Application.__new__(gui._Application)
+    app.root = MagicMock()
+    app.messagebox = MagicMock()
+    app.messagebox.askyesno.return_value = True
+    app._begin_split = MagicMock()
+    result = _result(
+        FitStatus.SPLIT_AVAILABLE,
+        delegated_route_status="target-not-met",
+    )
+    snapshot = SourceSnapshot(size_bytes=20_000_000, mtime_ns=456)
+    monkeypatch.setattr(gui, "capture_source_snapshot", lambda path: snapshot)
+
+    app._offer_split(result, simple=True)
+
+    app._begin_split.assert_called_once_with(
+        result,
+        simple=True,
+        snapshot=snapshot,
+    )
+
+
+def test_split_worker_uses_queue_boundary_for_second_backend_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import queue
+
+    app = gui._Application.__new__(gui._Application)
+    app.events = queue.Queue()
+    source = tmp_path / "input.pdf"
+    source.write_bytes(b"synthetic")
+    snapshot = SourceSnapshot(size_bytes=9, mtime_ns=123)
+    expected = _successful_split_result(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_run(
+        input_path: Path,
+        target_bytes: int,
+        source_snapshot: SourceSnapshot,
+        *,
+        progress_callback: object = None,
+    ) -> SplitResult:
+        captured["input_path"] = input_path
+        captured["target_bytes"] = target_bytes
+        captured["snapshot"] = source_snapshot
+        captured["progress_callback"] = progress_callback
+        return expected
+
+    monkeypatch.setattr(gui, "run_split_request", fake_run)
+
+    app._split_worker(source, 10_000_000, snapshot, True)
+
+    kind, value, simple = app.events.get_nowait()
+    assert kind == "split-result"
+    assert value is expected
+    assert simple is True
+    assert captured["input_path"] == source
+    assert captured["snapshot"] == snapshot
+    assert callable(captured["progress_callback"])
+
+
+def test_app_poll_handles_split_search_progress() -> None:
+    from unittest.mock import MagicMock
+    import queue
+
+    app = gui._Application.__new__(gui._Application)
+    app.events = queue.Queue()
+    app.busy = True
+    app.simple_controls = []
+    app.advanced_controls = []
+    app.status_var = MockWidget()
+    app.progress = MockWidget()
+    app.root = MagicMock()
+
+    app.events.put(
+        (
+            "progress",
+            ProgressEvent(
+                phase=ProgressPhase.SPLIT_SEARCH,
+                completed=2,
+                total=6,
+            ),
+            True,
+        )
+    )
+
+    app._poll()
+
+    assert app.busy is True
+    assert app.status_var.get() == "PDFを分割する位置を確認しています… 2/6"
