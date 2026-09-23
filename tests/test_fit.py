@@ -525,6 +525,42 @@ def test_fit_pdf_explicit_standard_mode_equivalent_to_omitted(
     assert best_fit_called is False
 
 
+@pytest.mark.parametrize(
+    "invalid_mode",
+    ["high-quality", "standard", "HIGH_QUALITY", "STANDARD", "invalid", 1, None, True],
+)
+def test_fit_pdf_rejects_non_fit_mode_strictly(
+    invalid_mode: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "input.pdf"
+    output = tmp_path / "output.pdf"
+
+    diagnose_called = False
+    fitter_called = False
+
+    def mock_diagnose(*args: Any, **kwargs: Any) -> Diagnosis:
+        nonlocal diagnose_called
+        diagnose_called = True
+        return _diagnosis(source, Route.IMAGE_HEAVY)
+
+    def mock_fitter(*args: Any, **kwargs: Any) -> ImageFitResult:
+        nonlocal fitter_called
+        fitter_called = True
+        return _image_result(source, output)
+
+    monkeypatch.setattr("pdf_size_fit.fit.diagnose_pdf", mock_diagnose)
+    monkeypatch.setattr("pdf_size_fit.fit.fit_image_heavy_pdf_first_fit", mock_fitter)
+    monkeypatch.setattr("pdf_size_fit.fit.fit_image_heavy_pdf_best_fit", mock_fitter)
+
+    with pytest.raises(TypeError, match="mode must be a FitMode"):
+        fit_pdf(source, output, mode=invalid_mode)  # type: ignore[arg-type]
+
+    # Preflight validation must prevent diagnosis and fitter execution
+    assert diagnose_called is False
+    assert fitter_called is False
+    assert not output.exists()
+
+
 def test_fit_pdf_high_quality_image_heavy_dispatches_to_best_fit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -395,12 +395,14 @@ def _max_unique_candidate_builds(min_quality: int, min_scale: float) -> int:
 
     num_scales = 100 - min_percent
 
-    max_downsampled_refine = 1
-    for k in range(1, n - 1):
-        builds = (k + 1) + (coarse[k - 1] - coarse[k] - 1)
-        if builds > max_downsampled_refine:
-            max_downsampled_refine = builds
-    if n > 1:
+    if n == 1:
+        max_downsampled_refine = 0
+    else:
+        max_downsampled_refine = 1
+        for k in range(1, n - 1):
+            builds = (k + 1) + (coarse[k - 1] - coarse[k] - 1)
+            if builds > max_downsampled_refine:
+                max_downsampled_refine = builds
         builds = (n - 1) + (coarse[n - 2] - coarse[n - 1] - 1)
         if builds > max_downsampled_refine:
             max_downsampled_refine = builds

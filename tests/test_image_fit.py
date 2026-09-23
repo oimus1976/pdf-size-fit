@@ -249,6 +249,8 @@ def test_max_unique_candidate_builds_anchors() -> None:
     assert _max_unique_candidate_builds(70, 0.50) == 67
     assert _max_unique_candidate_builds(70, 1.00) == 11
     assert _max_unique_candidate_builds(80, 0.80) == 33
+    assert _max_unique_candidate_builds(100, 1.00) == 1
+    assert _max_unique_candidate_builds(100, 0.50) == 51
 
     # Non-coarse floor cases (min_quality = 73)
     # _quality_probes(73) -> (100, 95, 90, 85, 80, 75, 73), n = 7
@@ -380,23 +382,52 @@ def test_fit_image_heavy_pdf_cache_reuse_avoids_duplicate_progress(
     output = tmp_path / "output.pdf"
     generate_image_heavy(source, pages=1, image_size=200)
 
-    # We mock measure behavior to test downsampling flow:
-    # Full res fails (7 probes at scale 100),
-    # downsampling scales probed 99..50 at q70.
-    # Suppose scale 50 fits at q70.
-    # Then search_quality(50) runs coarse probes.
-    # (50, 70) was already measured and cached!
-    # It must NOT emit an extra progress event on cache hit.
+    target_bytes = 10_000
+
+    built_candidates: list[tuple[int, int]] = []
+
+    def mock_build_candidate(
+        input_pdf_path: Path,
+        candidate_pdf_path: Path,
+        *,
+        quality: int,
+        scale: float,
+        removable_opaque_smask_refs: frozenset[tuple[int, int]],
+    ) -> int:
+        scale_percent = round(scale * 100)
+        built_candidates.append((scale_percent, quality))
+        # Condition sizes:
+        # Full resolution (scale 100): all exceed target
+        # Downsampled scale 99, quality 70: fits (e.g. 8_000 <= 10_000)
+        # Downsampled scale 99, quality > 70: exceed target (e.g. 12_000 > 10_000)
+        if scale_percent == 99 and quality == 70:
+            size = 8_000
+        else:
+            size = 12_000
+        candidate_pdf_path.write_bytes(b"x" * size)
+        return 1
+
+    monkeypatch.setattr("pdf_size_fit.image_fit._build_candidate", mock_build_candidate)
+    monkeypatch.setattr("pdf_size_fit.image_fit._verify_candidate", lambda *args, **kwargs: None)
+    monkeypatch.setattr("pdf_size_fit.image_fit._find_redundant_opaque_smask_images", lambda p: frozenset())
+
     events: list[ProgressEvent] = []
     result = fit_image_heavy_pdf(
         source,
         output,
-        target_bytes=1000,  # small target forces downsampling or search
+        target_bytes=target_bytes,
         min_quality=70,
         min_scale=0.50,
         progress_callback=events.append,
     )
-    # Regardless of whether it fits or target-not-met, check completed count matches len(attempts)
+
+    assert result.status is ImageFitStatus.FITTED
+    assert result.selected_scale == 0.99
+    assert result.selected_quality == 70
+    assert output.exists()
+    # (99, 70) was built during downsample scale scan and must not be rebuilt during search_quality
+    assert built_candidates.count((99, 70)) == 1
+    # Cache hit must not emit duplicate progress event
     assert len(events) == len(result.attempts)
     completed_values = [ev.completed for ev in events]
     assert completed_values == list(range(1, len(events) + 1))
