@@ -2,9 +2,32 @@
 
 Status: **Preliminary / not legal advice**
 
-The project license and final dependency set are not yet selected. This document records the current engineering constraints so license decisions are not made implicitly through implementation choices.
+The application source is licensed under the MIT License in the repository root
+`LICENSE`. Third-party components remain governed by their own licenses. This
+document records artifact-specific engineering review so application licensing
+and bundled dependency obligations are not conflated.
 
-## Issue #13 Stage 2 packaged-artifact review (2026-09-01)
+## Issue #13 portable refresh (2026-09-24)
+
+The repository license decision changed after the original Stage 2 artifact:
+the application source is now MIT-licensed. The portable build therefore treats
+the root `LICENSE` as an artifact-defining input and copies it beside the
+executable, `THIRD_PARTY_NOTICES.txt`, and the captured `licenses/` tree.
+
+The pinned Windows runtime and packager closure remains the same as the original
+Stage 2 review. However, a refreshed ZIP is not considered reviewed merely
+because the dependency versions are unchanged. For each refreshed artifact,
+the exact source commit, ZIP bytes/hash, runtime inventory, notice/license
+layout, NucBox9 smoke evidence, and work-PC gate must be recorded before Issue
+#13 can close.
+
+`THIRD_PARTY_NOTICES.txt` no longer embeds one historical application commit;
+the exact source commit is recorded by the build in
+`RUNTIME_INVENTORY.txt` and in the source-derived ZIP filename. This avoids a
+notice becoming stale when the reviewed application source changes while the
+third-party closure does not.
+
+## Issue #13 Stage 2 packaged-artifact review (2026-09-01, historical artifact)
 
 The reviewed artifact is the Windows x64 PyInstaller onedir ZIP described in
 `docs/PORTABLE_BUILD.md`, built from application source commit
@@ -112,6 +135,10 @@ Before any public or internal packaged release:
 
 ## Application license
 
-**Undecided.**
+**MIT License selected.**
 
-Do not add MIT, BSD, MPL, or another application license merely for repository completeness until the dependency and distribution review is sufficiently stable.
+The repository root `LICENSE` contains the application license. Portable
+artifacts must include that file. This application license decision does not
+replace, override, or summarize third-party license obligations; those remain
+tracked separately in `THIRD_PARTY_NOTICES.txt`, `licenses/`, and the
+artifact runtime inventory.
