@@ -4,12 +4,11 @@ PDF Size Fit - Third-Party Notices
 Artifact scope
 --------------
 
-This notice applies to the Windows x64 PyInstaller onedir artifact built from
-application source commit 1242df81e2a3bc6b0b00ddd9ef19595cb3fb548a on
-2026-09-01. The application code has no selected open-source license. This
-artifact is for internal evaluation only; no permission for public
-redistribution of the application code is granted. Third-party components
-remain governed by their own licenses.
+This notice is packaged with the Windows x64 PyInstaller onedir artifact.
+The exact application source commit for a built artifact is recorded in its
+adjacent RUNTIME_INVENTORY.txt and in the ZIP filename. The application source
+is licensed under the MIT License; the application LICENSE is included beside
+this notice. Third-party components remain governed by their own licenses.
 
 This file is an engineering inventory, not legal advice. Exact upstream
 license texts captured from the installed wheels and the Python distribution

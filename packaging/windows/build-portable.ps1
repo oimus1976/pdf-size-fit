@@ -39,6 +39,7 @@ $shortSourceCommit = $SourceCommit.Substring(0, [Math]::Min(7, $SourceCommit.Len
 $sourceInputs = @(
     "src",
     "pyproject.toml",
+    "LICENSE",
     "packaging/windows",
     "THIRD_PARTY_NOTICES.txt",
     "licenses"
@@ -83,6 +84,7 @@ $artifactDir = Join-Path $repoRoot "dist\pdf-size-fit"
 if (-not (Test-Path -LiteralPath (Join-Path $artifactDir "pdf-size-fit.exe"))) {
     throw "PyInstaller artifact was not created."
 }
+Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination $artifactDir
 Copy-Item -LiteralPath (Join-Path $repoRoot "THIRD_PARTY_NOTICES.txt") -Destination $artifactDir
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses") -Destination $artifactDir -Recurse
 

@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
 
 ## Current phase
 
@@ -37,6 +37,8 @@ When simple mode produces output and image reduction occurred (`selected_scale <
 Tkinter and Tk D&D integration are imported only at GUI startup. Headless tests cover the fixed boundary, no-op behavior, collision naming, immutable destinations, backend argument mapping, D&D parsing, shell/drop path convergence, and simple presentation without starting Tk or requiring a display. GitHub Actions runs the full suite on both Ubuntu and Windows for Python 3.11 and 3.12.
 
 The repository-root `start-pdf-size-fit.cmd` still uses the local `.venv\Scripts\pythonw.exe` for source-checkout development. Issue #13 Stage 2 produced a separate Windows x64 PyInstaller 6.22.2 onedir ZIP from source commit `1242df81e2a3bc6b0b00ddd9ef19595cb3fb548a`. NucBox9 smoke passed for GUI startup, shell-path no-op, collision-safe oversized fitting, immutable inputs/destinations, pypdf/PDFium reopen/render, and runtime network independence. Exact evidence and licensing status are in `docs/PORTABLE_BUILD.md` and `docs/LICENSE_REVIEW.md`. The ZIP is internal-evaluation-only and is not an installer, signed binary, public release, or completion of the separate work-PC gate.
+
+Issue #13 final closeout now requires a refreshed portable artifact from current merged source. Because the repository application license is now MIT, the portable build must include the root `LICENSE` and treat it as an artifact-defining input; the bundled third-party notice must not retain an obsolete application commit/license statement. The refreshed ZIP must receive a new exact hash/runtime inventory, NucBox9 smoke, and work-PC no-Python Stage 3 evidence before Issue #13 is closed.
 
 ## Validated compression routes so far
 

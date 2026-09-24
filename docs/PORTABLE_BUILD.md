@@ -31,7 +31,7 @@ SHA-256, and log path. On failure, it shows the durable log path and the final
 Before packaging, the build resolves the requested source reference to an exact
 commit and fails closed if the checkout differs from that commit for any
 artifact-defining tracked input under `src/`, `pyproject.toml`,
-`packaging/windows/`, `THIRD_PARTY_NOTICES.txt`, or `licenses/`. The build also
+`LICENSE`, `packaging/windows/`, `THIRD_PARTY_NOTICES.txt`, or `licenses/`. The build also
 verifies that the isolated build environment is CPython 3.12.10 x64 before it
 records that runtime identity in the artifact inventory.
 
@@ -48,7 +48,16 @@ The PowerShell implementation remains available as
 are applied consistently. The script is compatible with Windows PowerShell 5.1
 and later for the supported build path.
 
-## Stage 2 artifact
+## Current Issue #13 refresh policy
+
+For a refreshed portable build, the source-derived ZIP name and
+`RUNTIME_INVENTORY.txt` provide the exact application source commit. The build
+must include the root application `LICENSE`, `THIRD_PARTY_NOTICES.txt`, and
+`licenses/` beside the executable/runtime tree. A prior artifact hash or prior
+machine smoke result is not reused as evidence for a new source commit; the
+refreshed ZIP is hashed and smoke-tested again before the work-PC gate.
+
+## Stage 2 artifact (historical)
 
 `dist/pdf-size-fit-win-x64-source-1242df8.zip` is 23,226,981 bytes with
 SHA-256 `46A6406A661146C638E152D98E9956825E2C744183E473F44DB33410B0BD0FC3`.

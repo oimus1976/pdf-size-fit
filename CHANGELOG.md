@@ -77,6 +77,8 @@ The project is currently experimental and does not yet use formal releases.
 
 ### Changed
 
+- Windows portable packaging now treats the root MIT `LICENSE` as an artifact-defining input, copies it beside the executable, and keeps `THIRD_PARTY_NOTICES.txt` source-commit-neutral while exact artifact identity remains in the ZIP name and `RUNTIME_INVENTORY.txt` (Issue #13).
+
 - Integrated fitting now promotes only delegated `target-not-met` results that pass split preflight to `FitStatus.SPLIT_AVAILABLE`; hard refusals never enter split eligibility.
 - Page splitting chooses the largest fitting contiguous range from each current start page by measuring real emitted PDFs from longest to shortest. It does not assume file-size monotonicity or claim a global minimum-partition optimum.
 - Split publication stages and validates all selected parts before exclusively creating final names; known publication failures and unexpected final-validation failures remove every final file created by the operation.
