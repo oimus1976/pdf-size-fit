@@ -65,8 +65,7 @@ It contains one top-level `pdf-size-fit/` directory:
 
 - `pdf-size-fit.exe` - 3,736,642 bytes;
 - `_internal/` - the CPython and native/application runtime;
-- `LICENSE` - the MIT application license;
-- `THIRD_PARTY_NOTICES.txt` and `licenses/` - bundled-component notices and
+- `THIRD_PARTY_NOTICES.txt` and `licenses/` - artifact-specific notices and
   captured license texts;
 - `RUNTIME_INVENTORY.txt` - paths, byte sizes, SHA-256 values, and available
   file versions for every bundled EXE, DLL, and PYD.
