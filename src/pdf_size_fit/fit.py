@@ -157,10 +157,13 @@ def fit_pdf(
     min_scale: float = 1.0,
     allow_small_searchable_text_rasterization: bool = False,
     progress_callback: ProgressCallback | None = None,
+    decision_viewing: bool = False,
 ) -> FitResult:
     """Diagnose a PDF and dispatch only to an existing supported safe route."""
     if not isinstance(mode, FitMode):
         raise TypeError("mode must be a FitMode")
+    if decision_viewing and mode is not FitMode.STANDARD:
+        raise ValueError("決裁閲覧用と高画質モードは同時に使用できません。")
 
     if target_bytes <= 0:
         raise ValueError("target_bytes must be greater than zero")
@@ -191,6 +194,23 @@ def fit_pdf(
             target_bytes=target_bytes,
             delegated_route_status=None,
             reasons=diagnosis.reasons,
+        )
+
+    # This user profile authorizes only the existing bounded monochrome route.
+    # Enforce at dispatch, using the same diagnosis as the actual execution.
+    if decision_viewing and diagnosis.route is not Route.VECTOR_MONOCHROME:
+        return FitResult(
+            status=FitStatus.UNSUPPORTED_ROUTE,
+            route=diagnosis.route,
+            input_path=str(input_path),
+            output_path=None,
+            input_size_bytes=diagnosis.file_size_bytes,
+            output_size_bytes=None,
+            target_bytes=target_bytes,
+            delegated_route_status=None,
+            reasons=diagnosis.reasons + (
+                "decision-viewing profile supports only the guarded vector-monochrome route; no output was written",
+            ),
         )
 
     if mode is FitMode.HIGH_QUALITY:

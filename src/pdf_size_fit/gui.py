@@ -5,7 +5,7 @@ import json
 import os
 import queue
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -34,6 +34,13 @@ ALREADY_BELOW_MESSAGE = "このPDFはすでに10MB以下です。変換は不要
 DEFAULT_TARGET_MB = "10"
 DEFAULT_MIN_QUALITY = "70"
 DEFAULT_MIN_SCALE_PERCENT = "100"
+DECISION_VIEWING_WARNING = (
+    "決裁閲覧用の派生PDFを作成します。原本は別に保管してください。\n"
+    "文字検索・コピーと、ベクターの拡大時の鮮明さを永久に失う場合があります。\n"
+    "対応する白黒文書のみ、安全条件を満たす場合に変換します。\n"
+    "アプリの既定の暫定目標は10,000,000バイトです。電子決裁システムの実上限は未確認です。\n"
+    "作成後は実際の決裁ビューアで拡大し、全ページの内容を確認してください。"
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,7 @@ class GuiRequest:
     min_scale: float
     allow_small_searchable_text_rasterization: bool
     mode: FitMode = FitMode.STANDARD
+    decision_viewing: bool = False
 
 
 @dataclass(frozen=True)
@@ -144,18 +152,23 @@ def build_request(
 def build_simple_request(
     input_path: str | Path,
     mode: FitMode = FitMode.STANDARD,
+    *,
+    decision_viewing: bool = False,
 ) -> GuiRequest:
-    """Build the fixed, non-destructive-opt-in request used by every simple input."""
+    """Build a simple request; destructive opt-in requires the viewing profile."""
     source = Path(input_path)
-    return build_request(
+    if decision_viewing and mode is not FitMode.STANDARD:
+        raise ValueError("決裁閲覧用と高画質モードは同時に使用できません。片方のチェックを外してください。")
+    request = build_request(
         str(source),
         str(suggest_output_path(source)),
         "10",
         str(SIMPLE_MIN_QUALITY),
         str(round(SIMPLE_MIN_SCALE * 100)),
-        False,
+        decision_viewing,
         mode=mode,
     )
+    return replace(request, decision_viewing=decision_viewing)
 
 
 def run_request(
@@ -174,6 +187,10 @@ def run_request(
     }
     if request.mode is FitMode.HIGH_QUALITY:
         kwargs["mode"] = request.mode
+    if request.decision_viewing:
+        if request.mode is not FitMode.STANDARD:
+            raise ValueError("決裁閲覧用と高画質モードは同時に使用できません。")
+        kwargs["decision_viewing"] = True
     if progress_callback is not None:
         kwargs["progress_callback"] = progress_callback
     return fitter(
@@ -264,11 +281,23 @@ def _format_target_label(value: int) -> str:
     return f"{decimal_mb}MB"
 
 
-def present_simple_result(result: FitResult) -> ResultPresentation:
+def _viewing_summary(result: FitResult, decision_viewing: bool) -> str:
+    lines = []
+    if decision_viewing:
+        lines.append("決裁閲覧用の派生PDFです。原本は別に保管し、実際の決裁ビューアで全ページを確認してください。")
+    if any("and search/copy semantics were lost" in reason for reason in result.reasons):
+        lines.append("警告: 検索可能な文字を画像化したため、その文字の検索・コピーはできなくなりました。")
+    return "\n".join(lines)
+
+
+def present_simple_result(result: FitResult, *, decision_viewing: bool = False) -> ResultPresentation:
     details = json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
     if result.status is FitStatus.FITTED:
         output_size = result.output_size_bytes or 0
         summary_lines = [f"同じフォルダーに作成しました。\n{result.output_path}"]
+        viewing_summary = _viewing_summary(result, decision_viewing)
+        if viewing_summary:
+            summary_lines.append(viewing_summary)
         route_result = result.route_result
         selected_scale = getattr(route_result, "selected_scale", None)
         selected_quality = getattr(route_result, "selected_quality", None)
@@ -320,7 +349,11 @@ def present_simple_result(result: FitResult) -> ResultPresentation:
         return ResultPresentation(
             category="unsupported-route",
             title="このPDFは安全に変換できませんでした。",
-            summary="出力ファイルは作成していません。必要なら詳細設定を確認してください。",
+            summary=(
+                "決裁閲覧用は安全条件を満たす白黒ベクター文書のみ対応しています。出力ファイルは作成していません。"
+                if decision_viewing else
+                "出力ファイルは作成していません。必要なら詳細設定を確認してください。"
+            ),
             details=details,
         )
 
@@ -339,7 +372,7 @@ def present_simple_result(result: FitResult) -> ResultPresentation:
     )
 
 
-def present_result(result: FitResult) -> ResultPresentation:
+def present_result(result: FitResult, *, decision_viewing: bool = False) -> ResultPresentation:
     details = json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
     if result.status is FitStatus.FITTED:
         summary = "\n".join(
@@ -351,6 +384,9 @@ def present_result(result: FitResult) -> ResultPresentation:
                 f"出力先: {result.output_path}",
             )
         )
+        viewing_summary = _viewing_summary(result, decision_viewing)
+        if viewing_summary:
+            summary += "\n" + viewing_summary
         return ResultPresentation(
             category="fitted",
             title="変換完了",
@@ -539,6 +575,7 @@ class _Application:
         self.scale_var = tk.StringVar(value=DEFAULT_MIN_SCALE_PERCENT)
         self.allow_text_var = tk.BooleanVar(value=False)
         self.high_quality_var = tk.BooleanVar(value=False)
+        self.decision_viewing_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="PDFをドロップするか、ファイルを選択してください。")
 
         frame = ttk.Frame(root, padding=20)
@@ -573,24 +610,35 @@ class _Application:
             variable=self.high_quality_var,
         )
         self.high_quality_check.pack(side="left", padx=8)
+        viewing_options = ttk.Frame(frame)
+        viewing_options.grid(row=2, column=0, sticky="ew")
+        self.decision_viewing_check = ttk.Checkbutton(
+            viewing_options, text="決裁閲覧用", variable=self.decision_viewing_var,
+        )
+        self.decision_viewing_check.pack()
+        ttk.Label(
+            viewing_options,
+            text="閲覧用派生物: 検索・コピーや拡大時の鮮明さを失う場合があります。原本は別に保管。",
+            wraplength=630,
+        ).pack(pady=4)
 
         self.progress = ttk.Progressbar(frame, mode="indeterminate")
-        self.progress.grid(row=2, column=0, sticky="ew")
+        self.progress.grid(row=3, column=0, sticky="ew")
         ttk.Label(
             frame,
             textvariable=self.status_var,
             wraplength=650,
             justify="center",
             anchor="center",
-        ).grid(row=3, column=0, sticky="ew", pady=12)
+        ).grid(row=4, column=0, sticky="ew", pady=12)
 
         self.open_button = ttk.Button(
             frame, text="フォルダーを開く", command=self._open_folder, state="disabled"
         )
-        self.open_button.grid(row=4, column=0)
+        self.open_button.grid(row=5, column=0)
 
         self.advanced = ttk.LabelFrame(frame, text="詳細設定", padding=12)
-        self.advanced.grid(row=5, column=0, sticky="nsew", pady=(14, 0))
+        self.advanced.grid(row=6, column=0, sticky="nsew", pady=(14, 0))
         self.advanced.columnconfigure(1, weight=1)
         self.advanced.rowconfigure(7, weight=1)
         self.advanced.grid_remove()
@@ -601,6 +649,7 @@ class _Application:
             self.pick_button,
             self.details_button,
             self.high_quality_check,
+            self.decision_viewing_check,
             self.drop_target,
         ]
         if startup_input is not None:
@@ -731,9 +780,12 @@ class _Application:
         input_path: str | Path,
         mode: FitMode | None = None,
     ) -> None:
+        if getattr(self, "busy", False):
+            return
         try:
             selected_mode = mode if mode is not None else self._selected_mode()
-            request = build_simple_request(input_path, mode=selected_mode)
+            viewing = hasattr(self, "decision_viewing_var") and self.decision_viewing_var.get()
+            request = build_simple_request(input_path, mode=selected_mode, decision_viewing=viewing)
         except ValueError as error:
             self._show(present_validation_error(error))
             return
@@ -745,6 +797,8 @@ class _Application:
         self._begin(request, simple=True)
 
     def _start_advanced(self) -> None:
+        if getattr(self, "busy", False):
+            return
         try:
             request = build_request(
                 self.input_var.get(),
@@ -755,6 +809,10 @@ class _Application:
                 self.allow_text_var.get(),
                 mode=self._selected_mode(),
             )
+            if hasattr(self, "decision_viewing_var") and self.decision_viewing_var.get():
+                if request.mode is not FitMode.STANDARD:
+                    raise ValueError("決裁閲覧用と高画質モードは同時に使用できません。片方のチェックを外してください。")
+                request = replace(request, decision_viewing=True, allow_small_searchable_text_rasterization=True)
         except ValueError as error:
             self._show(present_validation_error(error))
             return
@@ -769,13 +827,33 @@ class _Application:
         *,
         simple: bool,
     ) -> None:
+        if self.busy:
+            return
+        if request.decision_viewing:
+            try:
+                approved = self._confirm_decision_viewing()
+            except Exception as error:
+                self._show(present_error(error))
+                return
+            if not approved:
+                self._show(ResultPresentation(
+                    category="viewing-cancelled", title="決裁閲覧用の変換をキャンセルしました。",
+                    summary="出力ファイルは作成していません。", details="",
+                ))
+                return
+        try:
+            input_size = request.input_path.stat().st_size
+        except Exception as error:
+            self._show(present_error(error))
+            return
+        self.active_decision_viewing = request.decision_viewing
         self.split_output_directory = request.output_path.parent
         self.busy = True
         self.successful_output = None
         self.open_button.configure(state="disabled")
         for control in self.simple_controls + self.advanced_controls:
             control.configure(state="disabled")
-        if request.input_path.stat().st_size <= request.target_bytes:
+        if input_size <= request.target_bytes:
             initial_msg = "PDFを確認しています…"
         elif request.mode is FitMode.HIGH_QUALITY:
             initial_msg = "より高い画質を探しています…"
@@ -792,6 +870,28 @@ class _Application:
             daemon=True,
         ).start()
         self.root.after(100, self._poll)
+
+    def _confirm_decision_viewing(self) -> bool:
+        # Custom labels make the destructive opt-in explicit; close/Escape cancel.
+        from tkinter import simpledialog
+
+        class Confirmation(simpledialog.Dialog):
+            def body(dialog, master):
+                self.ttk.Label(master, text=DECISION_VIEWING_WARNING, wraplength=540).pack(padx=12, pady=12)
+
+            def buttonbox(dialog):
+                box = self.ttk.Frame(dialog)
+                self.ttk.Button(box, text="続行", command=dialog.ok).pack(side="left", padx=8)
+                cancel = self.ttk.Button(box, text="キャンセル", command=dialog.cancel)
+                cancel.pack(side="left", padx=8)
+                box.pack(pady=12)
+                dialog.bind("<Escape>", dialog.cancel)
+                cancel.focus_set()
+
+            def apply(dialog):
+                dialog.result = True
+
+        return Confirmation(self.root, title="決裁閲覧用 — 実行前の確認").result is True
 
     def _worker(
         self,
@@ -959,7 +1059,8 @@ class _Application:
                 presentation = present_split_result(value)
             elif kind == "result":
                 presentation = (
-                    present_simple_result(value) if simple else present_result(value)
+                    present_simple_result(value, decision_viewing=getattr(self, "active_decision_viewing", False))
+                    if simple else present_result(value, decision_viewing=getattr(self, "active_decision_viewing", False))
                 )
             else:
                 presentation = present_error(value)

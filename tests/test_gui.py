@@ -1357,3 +1357,258 @@ def test_split_offer_snapshots_before_prompt_and_uses_requested_output_directory
         output_directory=output_directory,
     )
 
+
+
+def _viewing_app(tmp_path, monkeypatch, *, approved=True):
+    import queue
+    from unittest.mock import MagicMock
+    app = gui._Application.__new__(gui._Application)
+    app.busy = False
+    app.root = MagicMock()
+    app.events = queue.Queue()
+    app.simple_controls = [MockWidget()]
+    app.advanced_controls = [MockWidget()]
+    for name in ('input_var', 'output_var', 'status_var', 'progress', 'details', 'open_button'):
+        setattr(app, name, MockWidget())
+    app.high_quality_var = MockWidget()
+    app.high_quality_var.set(False)
+    app.decision_viewing_var = MockWidget()
+    app.decision_viewing_var.set(True)
+    app._confirm_decision_viewing = MagicMock(return_value=approved)
+    # Execute the actual worker synchronously, leaving the real event queue/poll path.
+    class ImmediateThread:
+        def __init__(self, *, target, args, daemon):
+            self.target, self.args = target, args
+        def start(self):
+            self.target(*self.args)
+    monkeypatch.setattr(gui.threading, 'Thread', ImmediateThread)
+    source = tmp_path / 'synthetic.pdf'
+    with source.open('wb') as stream:
+        stream.truncate(SIMPLE_TARGET_BYTES + 1)
+    app.filedialog = MagicMock()
+    app.filedialog.askopenfilename.return_value = str(source)
+    app.root.tk.splitlist.return_value = (str(source),)
+    return app, source
+
+
+@pytest.mark.parametrize('ingestion', ['picker', 'drop', 'shell'])
+@pytest.mark.parametrize('approved', [False, True])
+def test_viewing_confirm_gates_all_ingestion(tmp_path, monkeypatch, ingestion, approved):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    app, source = _viewing_app(tmp_path, monkeypatch, approved=approved)
+    existing = tmp_path / 'synthetic-fit.pdf'
+    existing.write_bytes(b'existing')
+    fitter = MagicMock(return_value=_result(FitStatus.FITTED))
+    monkeypatch.setattr(gui, 'fit_pdf', fitter)
+    # run_request's default is bound at definition time: inject at worker boundary.
+    original_run = gui.run_request
+    def injected_run(req, **kw):
+        kw.pop('fitter', None)
+        return original_run(req, fitter=fitter, **kw)
+    monkeypatch.setattr(gui, 'run_request', injected_run)
+    if ingestion == 'picker':
+        app._choose_simple_input()
+    elif ingestion == 'drop':
+        app._on_drop(SimpleNamespace(data='synthetic drop'))
+    else:
+        app._accept_simple_input(source, mode=FitMode.STANDARD)
+    app._confirm_decision_viewing.assert_called_once()
+    assert fitter.call_count == int(approved)
+    if approved:
+        args, kwargs = fitter.call_args
+        assert args == (source, tmp_path / 'synthetic-fit-2.pdf')
+        assert kwargs['allow_small_searchable_text_rasterization'] is True
+        assert kwargs['decision_viewing'] is True
+        assert kwargs['target_bytes'] == 10_000_000
+        app._poll()
+        assert '決裁閲覧用の派生PDF' in app.status_var.get()
+    else:
+        assert app.busy is False
+        assert app.events.empty()
+        assert 'キャンセル' in app.status_var.get()
+    assert source.stat().st_size == SIMPLE_TARGET_BYTES + 1
+    assert existing.read_bytes() == b'existing'
+    assert not (tmp_path / 'synthetic-fit-2.pdf').exists()
+
+
+@pytest.mark.parametrize('size', [SIMPLE_TARGET_BYTES - 1, SIMPLE_TARGET_BYTES])
+def test_viewing_small_input_no_fitter_no_output(tmp_path, monkeypatch, size):
+    app, source = _viewing_app(tmp_path, monkeypatch)
+    with source.open('r+b') as stream:
+        stream.truncate(size)
+    monkeypatch.setattr(gui, 'run_request', lambda *a, **kw: pytest.fail('fitter invoked'))
+    app._accept_simple_input(source)
+    app._confirm_decision_viewing.assert_called_once()
+    app._poll()
+    assert app.status_var.get().startswith(ALREADY_BELOW_MESSAGE)
+    assert not (tmp_path / 'synthetic-fit.pdf').exists()
+
+
+def test_viewing_conflict_and_busy_never_begin(tmp_path, monkeypatch):
+    app, source = _viewing_app(tmp_path, monkeypatch)
+    app.high_quality_var.set(True)
+    app._accept_simple_input(source)
+    assert '同時に使用できません' in app.status_var.get()
+    app._confirm_decision_viewing.assert_not_called()
+    app.high_quality_var.set(False)
+    app.busy = True
+    app._accept_simple_input(source)
+    app._confirm_decision_viewing.assert_not_called()
+    assert app.events.empty()
+
+
+def test_standard_does_not_confirm_and_preserves_false_opt_in(tmp_path, monkeypatch):
+    app, source = _viewing_app(tmp_path, monkeypatch)
+    app.decision_viewing_var.set(False)
+    captured = []
+    monkeypatch.setattr(gui, 'run_request', lambda req, **kw: captured.append(req) or _result(FitStatus.FITTED))
+    app._accept_simple_input(source)
+    app._confirm_decision_viewing.assert_not_called()
+    assert not captured[0].decision_viewing
+    assert not captured[0].allow_small_searchable_text_rasterization
+
+
+@pytest.mark.parametrize('failure', ['confirm', 'worker'])
+def test_viewing_exception_creates_no_output(tmp_path, monkeypatch, failure):
+    app, source = _viewing_app(tmp_path, monkeypatch)
+    def fail(*args, **kwargs):
+        raise RuntimeError('synthetic failure')
+    if failure == 'confirm':
+        app._confirm_decision_viewing.side_effect = fail
+    else:
+        monkeypatch.setattr(gui, 'run_request', fail)
+    app._accept_simple_input(source)
+    if failure == 'worker':
+        app._poll()
+    assert not app.busy
+    assert not (tmp_path / 'synthetic-fit.pdf').exists()
+
+
+@pytest.mark.parametrize('lost', [True, False])
+@pytest.mark.parametrize('presenter', [present_result, present_simple_result])
+def test_viewing_warning_reports_actual_text_loss_only(lost, presenter):
+    from dataclasses import replace
+    result = replace(_result(FitStatus.FITTED), reasons=(
+        'a small selectable/searchable text layer was rasterized within both '
+        "parsers' provisional bounds by explicit opt-in; selectable/searchable "
+        'and search/copy semantics were lost' if lost else 'no selectable text',
+    ))
+    presentation = presenter(result, decision_viewing=True)
+    assert '決裁閲覧用の派生PDF' in presentation.summary
+    assert ('検索・コピーはできなくなりました' in presentation.summary) is lost
+    assert 'parsers' not in presentation.summary
+
+
+def test_viewing_split_prompt_stays_separately_authorized(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+    app, source = _viewing_app(tmp_path, monkeypatch)
+    app._offer_split = MagicMock()
+    result = _result(FitStatus.SPLIT_AVAILABLE, delegated_route_status='target-not-met')
+    monkeypatch.setattr(gui, 'run_request', lambda *a, **kw: result)
+    app._accept_simple_input(source)
+    app._poll()
+    app._offer_split.assert_called_once_with(result, simple=True)
+
+
+@pytest.mark.parametrize('choice', ['continue', 'cancel', 'close', 'escape'])
+def test_actual_viewing_dialog_labels_and_cancel_default(monkeypatch, choice):
+    from tkinter import simpledialog
+    from unittest.mock import MagicMock
+    app = gui._Application.__new__(gui._Application)
+    app.root = object()
+    buttons = {}
+    bindings = {}
+    app.ttk = MagicMock()
+    def button(parent, *, text, command):
+        buttons[text] = command
+        return MagicMock()
+    app.ttk.Button.side_effect = button
+    class DialogHarness:
+        def __init__(self, parent, title):
+            assert parent is app.root
+            self.result = None
+            self.body(object())
+            self.buttonbox()
+            assert set(buttons) == {'続行', 'キャンセル'}
+            if choice == 'continue':
+                buttons['続行']()
+            elif choice == 'cancel':
+                buttons['キャンセル']()
+            elif choice == 'escape':
+                bindings['<Escape>']()
+            else:
+                self.cancel()
+        def bind(self, key, command):
+            bindings[key] = command
+        def ok(self):
+            self.apply()
+        def cancel(self):
+            pass
+    monkeypatch.setattr(simpledialog, 'Dialog', DialogHarness)
+    assert app._confirm_decision_viewing() is (choice == 'continue')
+    warning = app.ttk.Label.call_args.kwargs['text']
+    for phrase in ('原本', '永久', '検索', 'コピー', '全ページ', '未確認'):
+        assert phrase in warning
+
+
+@pytest.mark.parametrize('viewing', [False, True])
+def test_real_gui_construction_defaults_and_shell_callback(tmp_path, monkeypatch, viewing):
+    from unittest.mock import MagicMock
+    app, source = _viewing_app(tmp_path, monkeypatch)
+    class Variable:
+        def __init__(self, value=''):
+            self.value = value
+        def get(self):
+            return self.value
+        def set(self, value):
+            self.value = value
+    tk = MagicMock()
+    tk.BooleanVar.side_effect = Variable
+    tk.StringVar.side_effect = Variable
+    root, ttk = MagicMock(), MagicMock()
+    built = gui._Application(root, tk, ttk, app.filedialog, startup_input=source)
+    assert built.decision_viewing_var.get() is False
+    assert built.allow_text_var.get() is False
+    assert built.high_quality_var.get() is False
+    assert built.decision_viewing_check in built.simple_controls
+    built.decision_viewing_var.set(viewing)
+    built._begin = MagicMock()
+    callback = root.after.call_args.args[1]
+    callback()
+    request = built._begin.call_args.args[0]
+    assert request.mode is FitMode.STANDARD
+    assert request.decision_viewing is viewing
+    assert request.allow_small_searchable_text_rasterization is viewing
+
+
+@pytest.mark.parametrize('approved', [False, True])
+def test_advanced_viewing_uses_confirmation_and_keeps_legacy_checkbox(tmp_path, monkeypatch, approved):
+    app, source = _viewing_app(tmp_path, monkeypatch, approved=approved)
+    app.input_var.set(str(source))
+    app.output_var.set(str(tmp_path / 'advanced.pdf'))
+    for name, value in [('target_var', '10'), ('quality_var', '70'), ('scale_var', '100'), ('allow_text_var', False)]:
+        var = MockWidget()
+        var.set(value)
+        setattr(app, name, var)
+    calls = []
+    monkeypatch.setattr(gui, 'run_request', lambda request, **kw: calls.append(request) or _result(FitStatus.FITTED))
+    app._start_advanced()
+    app._confirm_decision_viewing.assert_called_once()
+    assert len(calls) == int(approved)
+    if approved:
+        assert calls[0].decision_viewing
+        assert calls[0].allow_small_searchable_text_rasterization
+    assert app.allow_text_var.get() is False
+
+
+def test_viewing_removed_source_after_confirmation_restores_idle(tmp_path, monkeypatch):
+    app, source = _viewing_app(tmp_path, monkeypatch)
+    def confirm():
+        source.unlink()
+        return True
+    app._confirm_decision_viewing.side_effect = confirm
+    app._accept_simple_input(source)
+    assert not app.busy
+    assert app.events.empty()
+    assert not (tmp_path / 'synthetic-fit.pdf').exists()

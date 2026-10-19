@@ -8,6 +8,7 @@ The project is currently experimental and does not yet use formal releases.
 
 ### Added
 
+- Default-off `決裁閲覧用` GUI profile with a pre-execution `続行`/`キャンセル` dialog, monochrome-only dispatch, high-quality conflict rejection, and visible warnings for actual search/copy loss (Issue #41). Existing text/structure safety bounds, original preservation, collision naming, progress, split confirmation, and standard/API defaults remain unchanged. The current 10,000,000-byte app target is provisional; actual approval-system limits and human viewer acceptance remain unconfirmed.
 - Safe page-splitting fallback for ordinary `target-not-met` results, with a dedicated strict eligibility preflight, explicit user approval, actual-output-size range search, per-part reopen/render validation, collision-safe group naming, and rollback cleanup (Issue #35).
 - Split execution API and result contracts (`SplitEligibilityStatus`, `SplitStatus`, `SplitPart`, `split_pdf`) plus source-snapshot checks that reject a PDF changed between approval and mutation.
 - Split-search progress reporting (`ProgressPhase.SPLIT_SEARCH`) with a fixed `N * (N + 1) / 2` unique-range upper bound and observational callback semantics.

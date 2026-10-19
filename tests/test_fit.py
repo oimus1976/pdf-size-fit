@@ -992,3 +992,38 @@ def test_fit_pdf_high_quality_target_not_met_can_become_split_available(
 
     assert result.status is FitStatus.SPLIT_AVAILABLE
     assert result.delegated_route_status == ImageFitStatus.TARGET_NOT_MET.value
+
+
+@pytest.mark.parametrize('route', list(Route))
+def test_decision_viewing_dispatch_is_mono_only(tmp_path, monkeypatch, route):
+    from unittest.mock import MagicMock
+    source, output = tmp_path / 'input.pdf', tmp_path / 'output.pdf'
+    source.write_bytes(b'synthetic')
+    monkeypatch.setattr('pdf_size_fit.fit.diagnose_pdf', lambda *a, **kw: _diagnosis(source, route))
+    mono = MagicMock(return_value=_monochrome_result(source, output))
+    monkeypatch.setattr('pdf_size_fit.fit.fit_monochrome_vector_pdf', mono)
+    def unexpected(*a, **kw):
+        pytest.fail('profile escaped monochrome dispatch')
+    monkeypatch.setattr('pdf_size_fit.fit.fit_color_vector_pdf', unexpected)
+    monkeypatch.setattr('pdf_size_fit.fit.fit_image_heavy_pdf_first_fit', unexpected)
+    result = fit_pdf(source, output, target_bytes=10_000, decision_viewing=True,
+                     allow_small_searchable_text_rasterization=True)
+    if route is Route.VECTOR_MONOCHROME:
+        assert result.status is FitStatus.FITTED
+        assert mono.call_args.kwargs['allow_small_searchable_text_rasterization'] is True
+        assert mono.call_args.kwargs['dpi'] == 300
+    elif route is Route.SKIP:
+        assert result.status is FitStatus.ALREADY_BELOW_TARGET
+        mono.assert_not_called()
+    else:
+        assert result.status is FitStatus.UNSUPPORTED_ROUTE
+        mono.assert_not_called()
+    assert source.read_bytes() == b'synthetic'
+    assert not output.exists()
+
+
+def test_decision_viewing_rejects_high_quality_before_diagnosis(tmp_path, monkeypatch):
+    monkeypatch.setattr('pdf_size_fit.fit.diagnose_pdf', lambda *a, **kw: pytest.fail('diagnosed'))
+    with pytest.raises(ValueError, match='同時に使用できません'):
+        fit_pdf(tmp_path / 'input.pdf', tmp_path / 'output.pdf',
+                decision_viewing=True, mode=FitMode.HIGH_QUALITY)
