@@ -1432,16 +1432,26 @@ def test_viewing_confirm_gates_all_ingestion(tmp_path, monkeypatch, ingestion, a
     assert not (tmp_path / 'synthetic-fit-2.pdf').exists()
 
 
+@pytest.mark.parametrize('ingestion', ['picker', 'drop', 'shell'])
 @pytest.mark.parametrize('size', [SIMPLE_TARGET_BYTES - 1, SIMPLE_TARGET_BYTES])
-def test_viewing_small_input_no_fitter_no_output(tmp_path, monkeypatch, size):
+def test_viewing_small_input_no_confirmation_fitter_or_output(tmp_path, monkeypatch, size, ingestion):
+    from types import SimpleNamespace
     app, source = _viewing_app(tmp_path, monkeypatch)
     with source.open('r+b') as stream:
         stream.truncate(size)
     monkeypatch.setattr(gui, 'run_request', lambda *a, **kw: pytest.fail('fitter invoked'))
-    app._accept_simple_input(source)
-    app._confirm_decision_viewing.assert_called_once()
-    app._poll()
+    monkeypatch.setattr(gui.threading, 'Thread', lambda **kw: pytest.fail('worker started'))
+    if ingestion == 'picker':
+        app._choose_simple_input()
+    elif ingestion == 'drop':
+        app._on_drop(SimpleNamespace(data='synthetic drop'))
+    else:
+        app._accept_simple_input(source, mode=FitMode.STANDARD)
+    app._confirm_decision_viewing.assert_not_called()
+    assert app.events.empty()
+    assert not app.busy
     assert app.status_var.get().startswith(ALREADY_BELOW_MESSAGE)
+    assert '派生PDF' not in app.status_var.get()
     assert not (tmp_path / 'synthetic-fit.pdf').exists()
 
 
@@ -1568,6 +1578,10 @@ def test_real_gui_construction_defaults_and_shell_callback(tmp_path, monkeypatch
     tk.StringVar.side_effect = Variable
     root, ttk = MagicMock(), MagicMock()
     built = gui._Application(root, tk, ttk, app.filedialog, startup_input=source)
+    labels = [call.kwargs.get('text', '') for call in ttk.Checkbutton.call_args_list]
+    assert '決裁閲覧用（白黒ベクターPDF向け）' in labels
+    captions = [call.kwargs.get('text', '') for call in ttk.Label.call_args_list]
+    assert any('白黒ベクターPDF専用の限定機能' in text for text in captions)
     assert built.decision_viewing_var.get() is False
     assert built.allow_text_var.get() is False
     assert built.high_quality_var.get() is False
@@ -1611,4 +1625,51 @@ def test_viewing_removed_source_after_confirmation_restores_idle(tmp_path, monke
     app._accept_simple_input(source)
     assert not app.busy
     assert app.events.empty()
+    assert not (tmp_path / 'synthetic-fit.pdf').exists()
+
+
+@pytest.mark.parametrize('simple', [False, True])
+def test_viewing_noop_cannot_start_unconfirmed_conversion_if_source_grows(tmp_path, monkeypatch, simple):
+    from dataclasses import replace
+    app, source = _viewing_app(tmp_path, monkeypatch)
+    target = SIMPLE_TARGET_BYTES if simple else 1_000
+    with source.open('r+b') as stream:
+        stream.truncate(target)
+    request = replace(build_simple_request(source, decision_viewing=True), target_bytes=target)
+    original_stat = Path.stat
+    grown = False
+    def stat_then_grow(path, *args, **kwargs):
+        nonlocal grown
+        measured = original_stat(path, *args, **kwargs)
+        if path == source and not grown:
+            grown = True
+            with source.open('r+b') as stream:
+                stream.truncate(target + 1)
+        return measured
+    monkeypatch.setattr(Path, 'stat', stat_then_grow)
+    monkeypatch.setattr(gui.threading, 'Thread', lambda **kw: pytest.fail('unconfirmed worker'))
+    monkeypatch.setattr(gui, 'run_request', lambda *a, **kw: pytest.fail('unconfirmed fitter'))
+    app._begin(request, simple=simple)
+    assert grown
+    assert source.stat().st_size == target + 1
+    app._confirm_decision_viewing.assert_not_called()
+    assert not app.busy
+    assert app.events.empty()
+    assert '出力ファイルは作成していません' in app.status_var.get()
+    assert not request.output_path.exists()
+
+
+def test_viewing_oversized_source_shrinks_after_confirm_backend_noop_remains(tmp_path, monkeypatch):
+    app, source = _viewing_app(tmp_path, monkeypatch)
+    def confirm_then_shrink():
+        with source.open('r+b') as stream:
+            stream.truncate(SIMPLE_TARGET_BYTES)
+        return True
+    app._confirm_decision_viewing.side_effect = confirm_then_shrink
+    monkeypatch.setattr(gui, 'run_request', lambda *a, **kw: pytest.fail('fitter invoked'))
+    app._accept_simple_input(source)
+    app._confirm_decision_viewing.assert_called_once()
+    app._poll()
+    assert not app.busy
+    assert app.status_var.get().startswith(ALREADY_BELOW_MESSAGE)
     assert not (tmp_path / 'synthetic-fit.pdf').exists()

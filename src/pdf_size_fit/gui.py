@@ -613,12 +613,12 @@ class _Application:
         viewing_options = ttk.Frame(frame)
         viewing_options.grid(row=2, column=0, sticky="ew")
         self.decision_viewing_check = ttk.Checkbutton(
-            viewing_options, text="決裁閲覧用", variable=self.decision_viewing_var,
+            viewing_options, text="決裁閲覧用（白黒ベクターPDF向け）", variable=self.decision_viewing_var,
         )
         self.decision_viewing_check.pack()
         ttk.Label(
             viewing_options,
-            text="閲覧用派生物: 検索・コピーや拡大時の鮮明さを失う場合があります。原本は別に保管。",
+            text="白黒ベクターPDF専用の限定機能です。閲覧用派生物は検索・コピーや拡大時の鮮明さを失う場合があります。原本は別に保管。",
             wraplength=630,
         ).pack(pady=4)
 
@@ -829,7 +829,28 @@ class _Application:
     ) -> None:
         if self.busy:
             return
+        try:
+            input_size = request.input_path.stat().st_size
+        except Exception as error:
+            self._show(present_error(error))
+            return
         if request.decision_viewing:
+            if input_size <= request.target_bytes:
+                # Finish here: a later size increase must not start an
+                # unconfirmed worker or produce a destructive derivative.
+                result = FitResult(
+                    status=FitStatus.ALREADY_BELOW_TARGET,
+                    route=Route.SKIP,
+                    input_path=str(request.input_path),
+                    output_path=None,
+                    input_size_bytes=input_size,
+                    output_size_bytes=None,
+                    target_bytes=request.target_bytes,
+                    delegated_route_status=None,
+                    reasons=("input is already at or below target; no output was written",),
+                )
+                self._show(present_simple_result(result) if simple else present_result(result))
+                return
             try:
                 approved = self._confirm_decision_viewing()
             except Exception as error:

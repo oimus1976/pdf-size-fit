@@ -52,7 +52,7 @@ Then double-click `start-pdf-size-fit.cmd`. The default view is centered on `PDF
 
 Simple mode fixes the target at exactly `10_000_000` bytes. A PDF at or below that boundary is not sent to the fitting backend, creates no output, and reports `このPDFはすでに10MB以下です。変換は不要です。`. An oversized supported PDF is written beside the input as `name-fit.pdf`, then `name-fit-2.pdf`, `name-fit-3.pdf`, and so on when names are already present. The original and every existing destination remain untouched.
 
-主画面の「決裁閲覧用」は既定OFFです。閲覧用の派生PDFを作るための明示選択で、実行前に「続行」/「キャンセル」で確認します。キャンセル時は変換を呼ばず出力も作成しません。原本は別に保管してください。文字検索・コピーやベクターの拡大時の鮮明さを永久に失う場合があり、実際に文字を画像化した場合は完了画面にも警告を表示します。作成後は実際の電子決裁ビューアで拡大し、全ページの数字・細字・図表などを人間が確認してください。実機での可読性の受入は別途必要です。
+主画面の「決裁閲覧用（白黒ベクターPDF向け）」は既定OFFのStage 1限定機能です。閲覧用の派生PDFを作るための明示選択で、目標サイズを超えている場合は実行前に「続行」/「キャンセル」で確認します。すでに目標サイズ以下なら確認ダイアログを出さず変換不要と表示し、変換を呼ばず出力も作成しません。キャンセル時も変換を呼ばず出力を作成しません。原本は別に保管してください。文字検索・コピーやベクターの拡大時の鮮明さを永久に失う場合があり、実際に文字を画像化した場合は完了画面にも警告を表示します。作成後は実際の電子決裁ビューアで拡大し、全ページの数字・細字・図表などを人間が確認してください。実機での可読性の受入は別途必要です。
 
 決裁閲覧用は既存の白黒ベクター経路（300dpi・1bit・CCITT G4）のみ対応し、少量文字の上限（1ページ8非空白文字・1行、文書全体256文字）、二系統パーサ一致、構造・注釈・署名・PDF/A・暗号化・マスク・ページ幾何等の安全条件を維持します。高画質モードとの同時選択はできません。詳細設定の従来の文字画像化チェックは引き続き利用できます。`fit_pdf(..., decision_viewing=True)` は経路を白黒に制限する追加キーワードで、従来APIの既定動作は変わりません。目標10,000,000バイトは保守的な**アプリの暫定値**です。電子決裁システムの実際の上限値ではなく、実上限は未確認です。
 
