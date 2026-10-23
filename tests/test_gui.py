@@ -1420,6 +1420,7 @@ def test_viewing_confirm_gates_all_ingestion(tmp_path, monkeypatch, ingestion, a
         assert args == (source, tmp_path / 'synthetic-fit-2.pdf')
         assert kwargs['allow_small_searchable_text_rasterization'] is True
         assert kwargs['decision_viewing'] is True
+        assert kwargs['approved_source_version'] == gui.capture_source_version(source)
         assert kwargs['target_bytes'] == 10_000_000
         app._poll()
         assert '決裁閲覧用の派生PDF' in app.status_var.get()
@@ -1659,7 +1660,7 @@ def test_viewing_noop_cannot_start_unconfirmed_conversion_if_source_grows(tmp_pa
     assert not request.output_path.exists()
 
 
-def test_viewing_oversized_source_shrinks_after_confirm_backend_noop_remains(tmp_path, monkeypatch):
+def test_viewing_source_shrinks_after_confirm_is_unapproved_version(tmp_path, monkeypatch):
     app, source = _viewing_app(tmp_path, monkeypatch)
     def confirm_then_shrink():
         with source.open('r+b') as stream:
@@ -1671,5 +1672,51 @@ def test_viewing_oversized_source_shrinks_after_confirm_backend_noop_remains(tmp
     app._confirm_decision_viewing.assert_called_once()
     app._poll()
     assert not app.busy
-    assert app.status_var.get().startswith(ALREADY_BELOW_MESSAGE)
+    assert '入力PDFが変更された' in app.status_var.get()
+    assert 'もう一度' in app.status_var.get()
     assert not (tmp_path / 'synthetic-fit.pdf').exists()
+
+
+@pytest.mark.parametrize('atomic', [False, True])
+def test_viewing_same_size_replacement_during_consent_refuses_before_worker(tmp_path, monkeypatch, atomic):
+    import os
+    from dataclasses import replace
+    app, source = _viewing_app(tmp_path, monkeypatch)
+    source.write_bytes(b'A' * 2048)
+    before = source.stat()
+    request = replace(build_simple_request(source, decision_viewing=True), target_bytes=1000)
+    def confirm_then_replace():
+        if atomic:
+            other = tmp_path / 'replacement.pdf'
+            other.write_bytes(b'B' * 2048)
+            os.utime(other, ns=(before.st_atime_ns, before.st_mtime_ns))
+            other.replace(source)
+        else:
+            source.write_bytes(b'B' * 2048)
+            os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return True
+    app._confirm_decision_viewing.side_effect = confirm_then_replace
+    monkeypatch.setattr(gui.threading, 'Thread', lambda **kw: pytest.fail('unapproved worker'))
+    monkeypatch.setattr(gui, 'run_request', lambda *a, **kw: pytest.fail('unapproved fitter'))
+    app._begin(request, simple=False)
+    assert not app.busy and app.events.empty()
+    assert 'もう一度' in app.status_var.get()
+    assert source.read_bytes() == b'B' * 2048 and not request.output_path.exists()
+
+
+def test_worker_keeps_approved_version_across_submission_gap(tmp_path, monkeypatch):
+    from dataclasses import replace
+    app, source = _viewing_app(tmp_path, monkeypatch)
+    source.write_bytes(b'A' * 2048)
+    request = replace(build_simple_request(source, decision_viewing=True), target_bytes=1000)
+    class ChangeBeforeWorker:
+        def __init__(self, *, target, args, daemon):
+            self.target, self.args = target, args
+        def start(self):
+            source.write_bytes(b'B' * 2048)
+            self.target(*self.args)
+    monkeypatch.setattr(gui.threading, 'Thread', ChangeBeforeWorker)
+    app._begin(request, simple=False)
+    app._poll()
+    assert not app.busy and 'もう一度' in app.status_var.get()
+    assert source.read_bytes() == b'B' * 2048 and not request.output_path.exists()

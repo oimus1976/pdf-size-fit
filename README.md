@@ -56,6 +56,10 @@ Simple mode fixes the target at exactly `10_000_000` bytes. A PDF at or below th
 
 決裁閲覧用は既存の白黒ベクター経路（300dpi・1bit・CCITT G4）のみ対応し、少量文字の上限（1ページ8非空白文字・1行、文書全体256文字）、二系統パーサ一致、構造・注釈・署名・PDF/A・暗号化・マスク・ページ幾何等の安全条件を維持します。高画質モードとの同時選択はできません。詳細設定の従来の文字画像化チェックは引き続き利用できます。`fit_pdf(..., decision_viewing=True)` は経路を白黒に制限する追加キーワードで、従来APIの既定動作は変わりません。目標10,000,000バイトは保守的な**アプリの暫定値**です。電子決裁システムの実際の上限値ではなく、実上限は未確認です。
 
+決裁閲覧用の確認は入力PDFの内容とファイル識別情報に結び付けます。確認中や処理中に同じサイズの別内容へ差し替えられても、その版へ自動で切り替えて変換せず、再選択・再実行を案内します。診断前に内容照合した一つの作業用コピーを固定し、安全検査・全ページ描画・出力検証を同じコピーから行います。白黒変換APIの直接呼出しも同じ方式です。原本や既存出力を復元・上書きせず、変更検出時には今回の出力を残しません。
+
+作業用コピーには原本サイズ相当と変換候補分の一時ディスク領域が必要です。コピーと内容照合は1MiB単位で行い、通常終了・取消し・例外時に作業用コピーを削除します。発行前後にも原本の内容・識別情報を照合しますが、外部ソフトの書込みをOSレベルで禁止するロックではありません。最終照合後の更新や、照合間で元の内容・識別情報に戻される更新を必ず検出する保証はなく、変換中は原本を編集せず、原本と実際に使用する派生PDFを版単位で別途保管してください。
+
 Quality, scale, route, and backend evidence are hidden from the default view. `詳細設定` retains the previous development controls. Simple mode automatically uses a bounded image scale floor of `min_scale=0.50` with minimum JPEG quality `70` in a single backend request, while searchable-text rasterization remains disabled (`allow_small_searchable_text_rasterization=False`). Advanced GUI default scale remains 100% (`min_scale=1.0`), and direct API/CLI defaults remain unchanged unless explicitly configured. The launcher uses `.venv\Scripts\pythonw.exe` and shows setup instructions if the expected runtime or installed project is missing. The same GUI is available through the `pdf-size-fit-gui` Python entry point.
 
 If the simple attempt succeeds and image reduction occurred (`selected_scale < 1.0`), the summary identifies that scaling was used and records the selected scale and JPEG quality with a quality-loss warning. Full-resolution success does not claim scale reduction. If simple mode fails to reach 10 MB (`10MB以下にできませんでした。`), no output file is created. Structural and `/SMask` safeguards remain strictly enforced, and the original PDF and pre-existing collision names remain unchanged.

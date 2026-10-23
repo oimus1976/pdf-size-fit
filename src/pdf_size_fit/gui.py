@@ -17,6 +17,9 @@ from .progress import (
     ProgressEvent,
     ProgressPhase,
 )
+from .source_version import (
+    SourceChangedError, SourceVersion, capture_source_version, require_source_version,
+)
 from .split import (
     SourceSnapshot,
     SplitResult,
@@ -53,6 +56,7 @@ class GuiRequest:
     allow_small_searchable_text_rasterization: bool
     mode: FitMode = FitMode.STANDARD
     decision_viewing: bool = False
+    approved_source_version: SourceVersion | None = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +195,8 @@ def run_request(
         if request.mode is not FitMode.STANDARD:
             raise ValueError("決裁閲覧用と高画質モードは同時に使用できません。")
         kwargs["decision_viewing"] = True
+        if request.approved_source_version is not None:
+            kwargs["approved_source_version"] = request.approved_source_version
     if progress_callback is not None:
         kwargs["progress_callback"] = progress_callback
     return fitter(
@@ -523,6 +529,11 @@ def present_split_cancelled(result: FitResult) -> ResultPresentation:
 
 
 def present_error(error: BaseException) -> ResultPresentation:
+    if isinstance(error, SourceChangedError):
+        return ResultPresentation(
+            category="source-changed", title="入力PDFの版を確認できませんでした。",
+            summary=str(error), details="SourceChangedError",
+        )
     return ResultPresentation(
         category="unexpected-error",
         title="予期しないエラーが発生しました",
@@ -852,6 +863,9 @@ class _Application:
                 self._show(present_simple_result(result) if simple else present_result(result))
                 return
             try:
+                # Bind this consent to bytes and file identity, including equal-size replacements.
+                version = capture_source_version(request.input_path)
+                request = replace(request, approved_source_version=version)
                 approved = self._confirm_decision_viewing()
             except Exception as error:
                 self._show(present_error(error))
@@ -861,6 +875,11 @@ class _Application:
                     category="viewing-cancelled", title="決裁閲覧用の変換をキャンセルしました。",
                     summary="出力ファイルは作成していません。", details="",
                 ))
+                return
+            try:
+                require_source_version(request.input_path, version)
+            except Exception as error:
+                self._show(present_error(error))
                 return
         try:
             input_size = request.input_path.stat().st_size
