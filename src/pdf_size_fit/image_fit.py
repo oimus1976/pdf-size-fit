@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from io import BytesIO
 from enum import Enum
 from math import ceil
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any
+from typing import Any, Callable
 
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject, StreamObject
 
 from .diagnose import Route, diagnose_pdf
+from .source_version import SourceChangedError, frozen_source
 from .progress import (
     ProgressCallback,
     ProgressEvent,
@@ -71,6 +73,9 @@ _PRESERVED_IMAGE_KEYS = {
     "/ID", "/OPI", "/Metadata", "/OC",
 }
 _REJECTED_IMAGE_KEYS = {"/Decode", "/Mask", "/ImageMask", "/SMaskInData"}
+_ALLOWED_ICC_STREAM_KEYS = {
+    "/N", "/Alternate", "/Range", "/Length", "/Filter", "/DecodeParms",
+}
 _ALLOWED_OPAQUE_SMASK_KEYS = {
     "/Type", "/Subtype", "/Width", "/Height", "/ColorSpace",
     "/BitsPerComponent", "/Filter", "/DecodeParms", "/Length",
@@ -138,6 +143,78 @@ def _simple_colorspace(obj: StreamObject) -> str | None:
     return None
 
 
+def _validated_iccbased_rgb_colorspace(obj: StreamObject, image: Image.Image) -> Any | None:
+    """Return the writer-local ICCBased color space only for a proven 8-bit RGB image.
+
+    JPEG replacement creates a /DeviceRGB image dictionary. Reusing the same
+    untransformed RGB samples requires restoring the *original* ICCBased array:
+    otherwise the color profile silently disappears during replacement.
+    """
+    raw = obj.raw_get("/ColorSpace")
+    space = _resolve_pdf_obj(raw)
+    if not isinstance(space, ArrayObject) or len(space) != 2 or space[0] != "/ICCBased":
+        return None
+
+    profile_ref = space[1]
+    if not isinstance(profile_ref, IndirectObject):
+        raise UnsupportedImageError("ICCBased profile must be an indirect stream")
+    profile = profile_ref.get_object()
+    if not isinstance(profile, StreamObject):
+        raise UnsupportedImageError("ICCBased profile is not a stream")
+    unknown = {str(k) for k in profile.keys()} - _ALLOWED_ICC_STREAM_KEYS
+    if unknown:
+        raise UnsupportedImageError(
+            "unsupported ICC profile dictionary keys: " + ", ".join(sorted(unknown))
+        )
+    if profile.get("/N") != 3 or profile.get("/Alternate", "/DeviceRGB") != "/DeviceRGB":
+        raise UnsupportedImageError("only ICCBased /N 3 with DeviceRGB alternate is supported")
+
+    value_range = _resolve_pdf_obj(profile.get("/Range"))
+    if value_range is not None:
+        if not isinstance(value_range, (ArrayObject, list)) or len(value_range) != 6:
+            raise UnsupportedImageError("unsupported ICCBased /Range")
+        try:
+            normalized = [float(v) for v in value_range]
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise UnsupportedImageError("unsupported ICCBased /Range") from exc
+        if normalized != [0.0, 1.0] * 3:
+            raise UnsupportedImageError("non-default ICCBased /Range is unsupported")
+
+    # pypdf/Pillow can ignore the PDF-level DCT ColorTransform override.
+    # An RGB Pillow mode alone does not prove the encoded sample meaning.
+    # Until a PDF-aware decoder is available, reject explicit transform 0.
+    filters = _resolve_pdf_obj(obj.get("/Filter"))
+    filter_names = list(filters) if isinstance(filters, ArrayObject) else [filters]
+    parms = _resolve_pdf_obj(obj.get("/DecodeParms"))
+    parm_items = list(parms) if isinstance(parms, ArrayObject) else [parms]
+    if "/DCTDecode" in filter_names:
+        dct_index = filter_names.index("/DCTDecode")
+        dct_parms = _resolve_pdf_obj(parm_items[dct_index]) if dct_index < len(parm_items) else None
+        if isinstance(dct_parms, DictionaryObject) and dct_parms.get("/ColorTransform") == 0:
+            raise UnsupportedImageError(
+                "ICCBased DCT /ColorTransform 0 is unsupported: decoded RGB samples may differ from PDF rendering"
+            )
+
+    if image.mode not in ("RGB", "RGBA") or (
+        image.mode == "RGBA" and "/SMask" not in obj
+    ):
+        raise UnsupportedImageError("ICCBased image did not decode as RGB samples")
+    try:
+        from PIL import ImageCms  # Loaded only for ICC inputs, not ordinary RGB PDFs.
+
+        icc_data = profile.get_data()
+        cms_profile = ImageCms.ImageCmsProfile(BytesIO(icc_data))
+        if cms_profile.profile.xcolor_space != "RGB ":
+            raise UnsupportedImageError("ICCBased profile color channels are not RGB")
+    except UnsupportedImageError:
+        raise
+    except Exception as exc:
+        raise UnsupportedImageError(
+            f"invalid or unreadable ICCBased RGB profile: {type(exc).__name__}"
+        ) from exc
+    return raw
+
+
 def _decode_is_identity_gray(decode: Any) -> bool:
     if decode is None:
         return True
@@ -181,13 +258,23 @@ def _is_redundant_opaque_smask(smask: Any, *, width: int, height: int) -> bool:
     return data.strip(b"\xff") == b""
 
 
+def _safe_page_images(page: Any):
+    """Enumerate lazily; malformed image dictionaries may fail inside pypdf."""
+    try:
+        yield from page.images
+    except Exception as exc:
+        raise UnsupportedImageError(
+            f"pypdf could not enumerate/decode an image XObject: {type(exc).__name__}"
+        ) from exc
+
+
 def _find_redundant_opaque_smask_images(input_path: Path) -> frozenset[tuple[int, int]]:
     reader = PdfReader(str(input_path))
     seen: set[tuple[int, int]] = set()
     removable: set[tuple[int, int]] = set()
 
     for page in reader.pages:
-        for img in page.images:
+        for img in _safe_page_images(page):
             ref = img.indirect_reference
             if ref is None:
                 continue
@@ -237,13 +324,18 @@ def _validate_image_for_replacement(img: Any) -> tuple[IndirectObject, dict[Any,
             + ", ".join(sorted(unknown))
         )
 
-    if _simple_colorspace(obj) is None:
-        raise UnsupportedImageError(f"unsupported image color space: {obj.get('/ColorSpace')!r}")
-
     if obj.get("/BitsPerComponent") != 8:
         raise UnsupportedImageError(
             f"unsupported bits per component: {obj.get('/BitsPerComponent')!r}; current PoC accepts 8-bit images"
         )
+
+    icc_colorspace = None
+    if _simple_colorspace(obj) is None:
+        if img.image is None:
+            raise UnsupportedImageError("pypdf could not decode an image XObject through Pillow")
+        icc_colorspace = _validated_iccbased_rgb_colorspace(obj, img.image)
+        if icc_colorspace is None:
+            raise UnsupportedImageError(f"unsupported image color space: {obj.get('/ColorSpace')!r}")
 
     smask = obj.get("/SMask")
     if smask is not None:
@@ -257,6 +349,8 @@ def _validate_image_for_replacement(img: Any) -> tuple[IndirectObject, dict[Any,
         raise UnsupportedImageError("pypdf could not decode an image XObject through Pillow")
 
     preserved = {key: value for key, value in obj.items() if str(key) in _PRESERVED_IMAGE_KEYS}
+    if icc_colorspace is not None:
+        preserved[NameObject("/ColorSpace")] = icc_colorspace
     return ref, preserved
 
 
@@ -290,7 +384,7 @@ def _build_candidate(
     replaced = 0
 
     for page in writer.pages:
-        for img in page.images:
+        for img in _safe_page_images(page):
             if img.indirect_reference is None:
                 continue
 
@@ -411,6 +505,22 @@ def _max_unique_candidate_builds(min_quality: int, min_scale: float) -> int:
     return max(max_full_res, downsampled_total)
 
 
+def _publish_candidate_exclusively(candidate: Path, output_path: Path) -> None:
+    """Never replace a file created by another process during candidate search."""
+    created = False
+    try:
+        with candidate.open("rb") as source:
+            # "xb" atomically refuses an existing pathname.
+            with output_path.open("xb") as destination:
+                created = True
+                shutil.copyfileobj(source, destination)
+    except BaseException:
+        # Close the destination handle before unlinking (required on Windows).
+        if created:
+            output_path.unlink(missing_ok=True)
+        raise
+
+
 def fit_image_heavy_pdf(
     input_path: str | Path,
     output_path: str | Path,
@@ -419,6 +529,41 @@ def fit_image_heavy_pdf(
     min_quality: int = 70,
     min_scale: float = 1.0,
     progress_callback: ProgressCallback | None = None,
+) -> ImageFitResult:
+    """Search a frozen source version and reject an externally modified original."""
+    original = Path(input_path)
+    destination = Path(output_path)
+    if original.resolve() == destination.resolve():
+        raise ValueError("output_path must differ from input_path")
+    if destination.exists():
+        raise FileExistsError(f"output path already exists: {destination}")
+    with frozen_source(original) as source:
+        result = _fit_image_heavy_pdf_from_snapshot(
+            source.path, destination,
+            target_bytes=target_bytes,
+            min_quality=min_quality,
+            min_scale=min_scale,
+            progress_callback=progress_callback,
+            _check_original=source.require_current,
+        )
+        try:
+            source.require_current()
+        except SourceChangedError:
+            if result.status is ImageFitStatus.FITTED:
+                destination.unlink(missing_ok=True)
+            raise
+        return replace(result, input_path=str(original))
+
+
+def _fit_image_heavy_pdf_from_snapshot(
+    input_path: str | Path,
+    output_path: str | Path,
+    *,
+    target_bytes: int = 10_000_000,
+    min_quality: int = 70,
+    min_scale: float = 1.0,
+    progress_callback: ProgressCallback | None = None,
+    _check_original: Callable[[], None],
 ) -> ImageFitResult:
     if target_bytes <= 0:
         raise ValueError("target_bytes must be greater than zero")
@@ -492,6 +637,7 @@ def fit_image_heavy_pdf(
 
     total_budget = _max_unique_candidate_builds(min_quality, min_scale)
 
+    published = False
     try:
         with tempfile.TemporaryDirectory(prefix="pdf-size-fit-") as temp_dir_name:
             temp_dir = Path(temp_dir_name)
@@ -604,17 +750,24 @@ def fit_image_heavy_pdf(
                     ),
                 )
 
-            shutil.copyfile(best_candidate, output_path)
+            _check_original()
+            _publish_candidate_exclusively(best_candidate, output_path)
+            published = True
     except Exception:
-        if output_path.exists():
-            output_path.unlink()
+        if published:
+            output_path.unlink(missing_ok=True)
         raise
 
-    _verify_candidate(input_path, output_path)
-    final_size = output_path.stat().st_size
-    if final_size > target_bytes:
-        output_path.unlink(missing_ok=True)
-        raise RuntimeError("selected output unexpectedly exceeds target after final copy")
+    try:
+        _verify_candidate(input_path, output_path)
+        final_size = output_path.stat().st_size
+        _check_original()
+        if final_size > target_bytes:
+            raise RuntimeError("selected output unexpectedly exceeds target after final copy")
+    except Exception:
+        if published:
+            output_path.unlink(missing_ok=True)
+        raise
 
     if best_scale < 1.0:
         fit_reason = (

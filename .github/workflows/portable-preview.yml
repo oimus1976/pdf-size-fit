@@ -1,0 +1,52 @@
+name: portable-preview
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/portable-preview.yml'
+      - 'src/**'
+      - 'packaging/windows/**'
+      - 'pyproject.toml'
+      - 'licenses/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.txt'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-portable:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12.10'
+          architecture: 'x64'
+      - name: Build exact-head portable ZIP
+        shell: pwsh
+        run: |
+          # GitHub's pwsh can pass its PowerShell 7 module path to Windows
+          # PowerShell 5.1; include the native module location explicitly.
+          $windowsModules = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'
+          $env:PSModulePath = "$windowsModules;$env:PSModulePath"
+          & powershell.exe -NoProfile -Command 'Get-Command Get-FileHash -ErrorAction Stop | Out-Null'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $python = (Get-Command python).Source
+          & .\packaging\windows\build-portable.cmd $python "${{ github.event.pull_request.head.sha }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $zip = Get-ChildItem -Path dist -Filter 'pdf-size-fit-win-x64-source-*.zip' | Select-Object -First 1
+          if (-not $zip) { throw 'Portable ZIP not produced' }
+          Write-Output "ArtifactBytes=$($zip.Length)"
+          Write-Output "ArtifactSHA256=$((Get-FileHash -LiteralPath $zip.FullName -Algorithm SHA256).Hash)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdf-size-fit-windows-portable-preview
+          path: dist/pdf-size-fit-win-x64-source-*.zip
+          if-no-files-found: error
+          retention-days: 14
