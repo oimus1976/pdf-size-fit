@@ -36,6 +36,26 @@ def _srgb_profile() -> bytes:
     return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 
 
+def _gradient_shared_pdf(path: Path) -> None:
+    # Smooth, nontrivial color variation provides a meaningful JPEG fidelity
+    # assertion. Pure random noise is inappropriate for a strict pixel metric.
+    image = Image.new("RGB", (300, 300))
+    pixels = image.load()
+    for y in range(300):
+        for x in range(300):
+            pixels[x, y] = (
+                round(x * 255 / 299),
+                round(y * 255 / 299),
+                round((x + y) * 255 / 598),
+            )
+    c = canvas.Canvas(str(path), pagesize=A4)
+    reader = ImageReader(image)
+    for _ in range(2):
+        c.drawImage(reader, 0, 0, width=A4[0], height=A4[1])
+        c.showPage()
+    c.save()
+
+
 def _make_icc_pdf(
     source: Path,
     target: Path,
@@ -95,7 +115,7 @@ def test_iccbased_full_resolution_preserves_profile_shared_ref_and_pixels(
     base = tmp_path / "base.pdf"
     source = tmp_path / "icc.pdf"
     output = tmp_path / "replaced.pdf"
-    generate_image_heavy(base, pages=2, image_size=300)
+    _gradient_shared_pdf(base)
     profile_bytes = _make_icc_pdf(base, source)
     source_hash = _sha256(source)
 
