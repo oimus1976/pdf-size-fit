@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from io import BytesIO
 from enum import Enum
 from math import ceil
 from pathlib import Path
@@ -71,6 +72,9 @@ _PRESERVED_IMAGE_KEYS = {
     "/ID", "/OPI", "/Metadata", "/OC",
 }
 _REJECTED_IMAGE_KEYS = {"/Decode", "/Mask", "/ImageMask", "/SMaskInData"}
+_ALLOWED_ICC_STREAM_KEYS = {
+    "/N", "/Alternate", "/Range", "/Length", "/Filter", "/DecodeParms",
+}
 _ALLOWED_OPAQUE_SMASK_KEYS = {
     "/Type", "/Subtype", "/Width", "/Height", "/ColorSpace",
     "/BitsPerComponent", "/Filter", "/DecodeParms", "/Length",
@@ -136,6 +140,63 @@ def _simple_colorspace(obj: StreamObject) -> str | None:
     if colorspace in ("/DeviceRGB", "/DeviceGray"):
         return str(colorspace)
     return None
+
+
+def _validated_iccbased_rgb_colorspace(obj: StreamObject, image: Image.Image) -> Any | None:
+    """Return the writer-local ICCBased color space only for a proven 8-bit RGB image.
+
+    JPEG replacement creates a /DeviceRGB image dictionary. Reusing the same
+    untransformed RGB samples requires restoring the *original* ICCBased array:
+    otherwise the color profile silently disappears during replacement.
+    """
+    raw = obj.raw_get("/ColorSpace")
+    space = _resolve_pdf_obj(raw)
+    if not isinstance(space, ArrayObject) or len(space) != 2 or space[0] != "/ICCBased":
+        return None
+
+    profile_ref = space[1]
+    if not isinstance(profile_ref, IndirectObject):
+        raise UnsupportedImageError("ICCBased profile must be an indirect stream")
+    profile = profile_ref.get_object()
+    if not isinstance(profile, StreamObject):
+        raise UnsupportedImageError("ICCBased profile is not a stream")
+    unknown = {str(k) for k in profile.keys()} - _ALLOWED_ICC_STREAM_KEYS
+    if unknown:
+        raise UnsupportedImageError(
+            "unsupported ICC profile dictionary keys: " + ", ".join(sorted(unknown))
+        )
+    if profile.get("/N") != 3 or profile.get("/Alternate", "/DeviceRGB") != "/DeviceRGB":
+        raise UnsupportedImageError("only ICCBased /N 3 with DeviceRGB alternate is supported")
+
+    value_range = _resolve_pdf_obj(profile.get("/Range"))
+    if value_range is not None:
+        if not isinstance(value_range, (ArrayObject, list)) or len(value_range) != 6:
+            raise UnsupportedImageError("unsupported ICCBased /Range")
+        try:
+            normalized = [float(v) for v in value_range]
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise UnsupportedImageError("unsupported ICCBased /Range") from exc
+        if normalized != [0.0, 1.0] * 3:
+            raise UnsupportedImageError("non-default ICCBased /Range is unsupported")
+
+    if image.mode not in ("RGB", "RGBA") or (
+        image.mode == "RGBA" and "/SMask" not in obj
+    ):
+        raise UnsupportedImageError("ICCBased image did not decode as RGB samples")
+    try:
+        from PIL import ImageCms  # Loaded only for ICC inputs, not ordinary RGB PDFs.
+
+        icc_data = profile.get_data()
+        cms_profile = ImageCms.ImageCmsProfile(BytesIO(icc_data))
+        if cms_profile.profile.xcolor_space != "RGB ":
+            raise UnsupportedImageError("ICCBased profile color channels are not RGB")
+    except UnsupportedImageError:
+        raise
+    except Exception as exc:
+        raise UnsupportedImageError(
+            f"invalid or unreadable ICCBased RGB profile: {type(exc).__name__}"
+        ) from exc
+    return raw
 
 
 def _decode_is_identity_gray(decode: Any) -> bool:
@@ -237,13 +298,18 @@ def _validate_image_for_replacement(img: Any) -> tuple[IndirectObject, dict[Any,
             + ", ".join(sorted(unknown))
         )
 
-    if _simple_colorspace(obj) is None:
-        raise UnsupportedImageError(f"unsupported image color space: {obj.get('/ColorSpace')!r}")
-
     if obj.get("/BitsPerComponent") != 8:
         raise UnsupportedImageError(
             f"unsupported bits per component: {obj.get('/BitsPerComponent')!r}; current PoC accepts 8-bit images"
         )
+
+    icc_colorspace = None
+    if _simple_colorspace(obj) is None:
+        if img.image is None:
+            raise UnsupportedImageError("pypdf could not decode an image XObject through Pillow")
+        icc_colorspace = _validated_iccbased_rgb_colorspace(obj, img.image)
+        if icc_colorspace is None:
+            raise UnsupportedImageError(f"unsupported image color space: {obj.get('/ColorSpace')!r}")
 
     smask = obj.get("/SMask")
     if smask is not None:
@@ -257,6 +323,8 @@ def _validate_image_for_replacement(img: Any) -> tuple[IndirectObject, dict[Any,
         raise UnsupportedImageError("pypdf could not decode an image XObject through Pillow")
 
     preserved = {key: value for key, value in obj.items() if str(key) in _PRESERVED_IMAGE_KEYS}
+    if icc_colorspace is not None:
+        preserved[NameObject("/ColorSpace")] = icc_colorspace
     return ref, preserved
 
 
