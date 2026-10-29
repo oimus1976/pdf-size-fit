@@ -24,6 +24,7 @@ from pypdf.generic import (
 )
 
 from .diagnose import Route, diagnose_pdf
+from .source_version import FrozenSource, frozen_source
 from .progress import (
     ProgressCallback,
     ProgressEvent,
@@ -978,7 +979,7 @@ def _copy_exclusive(source: Path, destination: Path) -> None:
         with source.open("rb") as input_file, destination.open("xb") as output_file:
             created = True
             shutil.copyfileobj(input_file, output_file)
-    except Exception:
+    except BaseException:
         if created:
             destination.unlink(missing_ok=True)
         raise
@@ -992,6 +993,7 @@ def fit_monochrome_vector_pdf(
     dpi: int = FIXED_DPI,
     allow_small_searchable_text_rasterization: bool = False,
     progress_callback: ProgressCallback | None = None,
+    _frozen_source: FrozenSource | None = None,
 ) -> MonochromeFitResult:
     if target_bytes <= 0:
         raise ValueError("target_bytes must be greater than zero")
@@ -1005,9 +1007,37 @@ def fit_monochrome_vector_pdf(
     if output_path.exists():
         raise FileExistsError(f"output path already exists: {output_path}")
 
-    input_size = input_path.stat().st_size
+    if _frozen_source is not None:
+        if _frozen_source.original_path != input_path:
+            raise ValueError("frozen source must belong to input_path")
+        _frozen_source.require_current()
+        return _fit_monochrome_frozen(
+            _frozen_source, output_path, target_bytes=target_bytes,
+            allow_small_searchable_text_rasterization=allow_small_searchable_text_rasterization,
+            progress_callback=progress_callback,
+        )
+    with frozen_source(input_path) as source:
+        return _fit_monochrome_frozen(
+            source, output_path, target_bytes=target_bytes,
+            allow_small_searchable_text_rasterization=allow_small_searchable_text_rasterization,
+            progress_callback=progress_callback,
+        )
+
+
+def _fit_monochrome_frozen(
+    source: FrozenSource,
+    output_path: Path,
+    *,
+    target_bytes: int,
+    allow_small_searchable_text_rasterization: bool,
+    progress_callback: ProgressCallback | None,
+) -> MonochromeFitResult:
+    # Keep the original path in results, but never give it to a PDF consumer.
+    input_path = source.original_path
+    read_path = source.path
+    input_size = source.version.size_bytes
     if input_size <= target_bytes:
-        reader = PdfReader(str(input_path))
+        reader = PdfReader(str(read_path))
         return _result(
             MonochromeFitStatus.SKIP,
             input_path,
@@ -1017,7 +1047,7 @@ def fit_monochrome_vector_pdf(
             reasons=("input is already at or below the target size; no output was written",),
         )
 
-    reader = PdfReader(str(input_path))
+    reader = PdfReader(str(read_path))
     page_specs, refusal = _preflight(reader)
     if refusal is not None or page_specs is None:
         return _result(
@@ -1029,7 +1059,7 @@ def fit_monochrome_vector_pdf(
             reasons=(refusal or "document failed the destructive-rasterization safety gate",),
         )
 
-    diagnosis = diagnose_pdf(input_path, target_bytes=target_bytes)
+    diagnosis = diagnose_pdf(read_path, target_bytes=target_bytes)
     if diagnosis.route is not Route.VECTOR_MONOCHROME:
         return _result(
             MonochromeFitStatus.ROUTE_MISMATCH,
@@ -1044,7 +1074,7 @@ def fit_monochrome_vector_pdf(
         )
 
     refusal, small_searchable_text_rasterized = _destructive_content_refusal(
-        input_path,
+        read_path,
         reader,
         page_specs,
         allow_small_searchable_text_rasterization=(
@@ -1067,12 +1097,12 @@ def fit_monochrome_vector_pdf(
         with tempfile.TemporaryDirectory(prefix="pdf-size-fit-monochrome-") as temp_dir:
             candidate = Path(temp_dir) / "candidate-300dpi-g4.pdf"
             _build_candidate(
-                input_path,
+                read_path,
                 candidate,
                 page_specs,
                 progress_callback=progress_callback,
             )
-            _verify_candidate(input_path, candidate)
+            _verify_candidate(read_path, candidate)
             candidate_size = candidate.stat().st_size
             if candidate_size > target_bytes:
                 return _result(
@@ -1086,13 +1116,15 @@ def fit_monochrome_vector_pdf(
                         "DPI was not reduced or searched; no output was written",
                     ),
                 )
+            source.require_current()
             _copy_exclusive(candidate, output_path)
             output_created = True
-        _verify_candidate(input_path, output_path)
+        _verify_candidate(read_path, output_path)
         output_size = output_path.stat().st_size
         if output_size > target_bytes:
             raise RuntimeError("accepted output unexpectedly exceeds target after final copy")
-    except Exception:
+        source.require_current()
+    except BaseException:
         if output_created:
             output_path.unlink(missing_ok=True)
         raise

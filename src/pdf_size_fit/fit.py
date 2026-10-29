@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -25,6 +25,7 @@ from .monochrome_fit import (
     fit_monochrome_vector_pdf,
 )
 from .progress import ProgressCallback
+from .source_version import SourceVersion, frozen_source
 from .split import SplitEligibilityStatus, evaluate_split_eligibility
 
 
@@ -117,7 +118,7 @@ def _normalize_route_result(diagnosis: Diagnosis, result: RouteResult) -> FitRes
     )
 
 
-def _with_split_availability(result: FitResult) -> FitResult:
+def _with_split_availability(result: FitResult, *, evaluation_path: Path | None = None) -> FitResult:
     if (
         result.status is not FitStatus.ROUTE_FAILED
         or result.delegated_route_status != "target-not-met"
@@ -125,7 +126,7 @@ def _with_split_availability(result: FitResult) -> FitResult:
         return result
 
     eligibility = evaluate_split_eligibility(
-        result.input_path,
+        evaluation_path if evaluation_path is not None else result.input_path,
         target_bytes=result.target_bytes,
     )
     status = (
@@ -147,6 +148,44 @@ def _with_split_availability(result: FitResult) -> FitResult:
     )
 
 
+def _fit_decision_viewing(
+    input_path: Path,
+    output_path: Path,
+    *,
+    target_bytes: int,
+    allow_small_searchable_text_rasterization: bool,
+    progress_callback: ProgressCallback | None,
+    approved_source_version: SourceVersion | None,
+) -> FitResult:
+    # Freeze before the *first* diagnosis, not just before rendering.
+    with frozen_source(input_path, approved_source_version) as source:
+        diagnosis = replace(
+            diagnose_pdf(source.path, target_bytes=target_bytes), path=str(input_path),
+        )
+        if diagnosis.route is not Route.VECTOR_MONOCHROME:
+            skip = diagnosis.route is Route.SKIP
+            return FitResult(
+                status=FitStatus.ALREADY_BELOW_TARGET if skip else FitStatus.UNSUPPORTED_ROUTE,
+                route=diagnosis.route, input_path=str(input_path), output_path=None,
+                input_size_bytes=diagnosis.file_size_bytes, output_size_bytes=None,
+                target_bytes=target_bytes, delegated_route_status=None,
+                reasons=diagnosis.reasons if skip else diagnosis.reasons + (
+                    "decision-viewing profile supports only the guarded vector-monochrome route; no output was written",
+                ),
+            )
+        route_result = fit_monochrome_vector_pdf(
+            input_path, output_path, target_bytes=target_bytes, dpi=FIXED_DPI,
+            allow_small_searchable_text_rasterization=allow_small_searchable_text_rasterization,
+            progress_callback=progress_callback, _frozen_source=source,
+        )
+        result = _with_split_availability(
+            _normalize_route_result(diagnosis, route_result), evaluation_path=source.path,
+        )
+        if result.status is not FitStatus.FITTED:
+            source.require_current()
+        return result
+
+
 def fit_pdf(
     input_path: str | Path,
     output_path: str | Path,
@@ -157,10 +196,14 @@ def fit_pdf(
     min_scale: float = 1.0,
     allow_small_searchable_text_rasterization: bool = False,
     progress_callback: ProgressCallback | None = None,
+    decision_viewing: bool = False,
+    approved_source_version: SourceVersion | None = None,
 ) -> FitResult:
     """Diagnose a PDF and dispatch only to an existing supported safe route."""
     if not isinstance(mode, FitMode):
         raise TypeError("mode must be a FitMode")
+    if decision_viewing and mode is not FitMode.STANDARD:
+        raise ValueError("決裁閲覧用と高画質モードは同時に使用できません。")
 
     if target_bytes <= 0:
         raise ValueError("target_bytes must be greater than zero")
@@ -177,6 +220,13 @@ def fit_pdf(
         raise ValueError("output_path must differ from input_path")
     if output_path.exists():
         raise FileExistsError(f"output path already exists: {output_path}")
+
+    if decision_viewing:
+        return _fit_decision_viewing(
+            input_path, output_path, target_bytes=target_bytes,
+            allow_small_searchable_text_rasterization=allow_small_searchable_text_rasterization,
+            progress_callback=progress_callback, approved_source_version=approved_source_version,
+        )
 
     diagnosis = diagnose_pdf(input_path, target_bytes=target_bytes)
 

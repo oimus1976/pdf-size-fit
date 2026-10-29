@@ -1140,11 +1140,13 @@ def test_raw_page_tree_accepts_inherited_mediabox_and_preserves_it(
         ),
     ],
 )
+@pytest.mark.parametrize("opt_in", [False, True])
 def test_fail_closed_safety_refusals(
     tmp_path: Path,
     fixture_name: str,
     mutate,
     reason_fragment: str,
+    opt_in: bool,
 ) -> None:
     base = tmp_path / "base.pdf"
     source = tmp_path / fixture_name
@@ -1152,11 +1154,17 @@ def test_fail_closed_safety_refusals(
     _generate_vector_pdf(base)
     _rewrite(base, source, mutate)
 
-    result = fit_monochrome_vector_pdf(source, output, target_bytes=1)
+    original_hash = _sha256(source)
+    result = fit_monochrome_vector_pdf(
+        source, output, target_bytes=1,
+        allow_small_searchable_text_rasterization=opt_in,
+    )
 
     assert result.status is MonochromeFitStatus.UNSUPPORTED_DOCUMENT
     assert reason_fragment in result.reasons[0]
     assert not output.exists()
+
+    assert _sha256(source) == original_hash
 
 
 @pytest.mark.parametrize(
@@ -1364,3 +1372,26 @@ def test_monochrome_callback_exception_does_not_affect_result(tmp_path: Path) ->
 
     assert result.status is MonochromeFitStatus.FITTED
     assert output.exists()
+
+
+def test_decision_viewing_real_synthetic_fit_reports_actual_text_loss(tmp_path):
+    from pdf_size_fit.fit import fit_pdf, FitStatus
+    from pdf_size_fit.gui import present_simple_result
+    source, output = tmp_path / 'synthetic-viewing.pdf', tmp_path / 'output.pdf'
+    _generate_vector_text_pdf(source, (("12345678",), ("12345678",)))
+    before = _sha256(source)
+    result = fit_pdf(source, output, target_bytes=_fit_target(source),
+                     decision_viewing=True, allow_small_searchable_text_rasterization=True)
+    assert result.status is FitStatus.FITTED
+    assert _sha256(source) == before
+    assert any(page.extract_text().strip() for page in PdfReader(source).pages)
+    assert all(not page.extract_text().strip() for page in PdfReader(output).pages)
+    presentation = present_simple_result(result, decision_viewing=True)
+    assert '決裁閲覧用の派生PDF' in presentation.summary
+    assert '検索・コピーはできなくなりました' in presentation.summary
+    existing_hash = _sha256(output)
+    with pytest.raises(FileExistsError):
+        fit_pdf(source, output, target_bytes=_fit_target(source),
+                decision_viewing=True, allow_small_searchable_text_rasterization=True)
+    assert _sha256(output) == existing_hash
+    assert _sha256(source) == before
