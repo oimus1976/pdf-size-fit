@@ -507,14 +507,18 @@ def _max_unique_candidate_builds(min_quality: int, min_scale: float) -> int:
 
 def _publish_candidate_exclusively(candidate: Path, output_path: Path) -> None:
     """Never replace a file created by another process during candidate search."""
-    with candidate.open("rb") as source:
-        # "xb" atomically refuses an existing pathname.
-        with output_path.open("xb") as destination:
-            try:
+    created = False
+    try:
+        with candidate.open("rb") as source:
+            # "xb" atomically refuses an existing pathname.
+            with output_path.open("xb") as destination:
+                created = True
                 shutil.copyfileobj(source, destination)
-            except BaseException:
-                output_path.unlink(missing_ok=True)
-                raise
+    except BaseException:
+        # Close the destination handle before unlinking (required on Windows).
+        if created:
+            output_path.unlink(missing_ok=True)
+        raise
 
 
 def fit_image_heavy_pdf(
