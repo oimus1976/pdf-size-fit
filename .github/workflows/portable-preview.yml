@@ -31,6 +31,12 @@ jobs:
       - name: Build exact-head portable ZIP
         shell: pwsh
         run: |
+          # GitHub's pwsh can pass its PowerShell 7 module path to Windows
+          # PowerShell 5.1; include the native module location explicitly.
+          $windowsModules = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'
+          $env:PSModulePath = "$windowsModules;$env:PSModulePath"
+          & powershell.exe -NoProfile -Command 'Get-Command Get-FileHash -ErrorAction Stop | Out-Null'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $python = (Get-Command python).Source
           & .\packaging\windows\build-portable.cmd $python "${{ github.event.pull_request.head.sha }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
