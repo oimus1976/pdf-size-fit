@@ -291,6 +291,15 @@ def test_image_fits_never_replace_existing_destination_created_mid_search(
     generate_image_heavy(base, pages=1, image_size=200)
     _make_icc_pdf(base, source)
     before = _sha256(source)
+    # This test must reach the actual publication step: Q100 exceeds target
+    # while a lower-quality candidate fits. Otherwise no file is published.
+    q100 = tmp_path / "probe-q100.pdf"
+    q70 = tmp_path / "probe-q70.pdf"
+    _build_candidate(source, q100, quality=100)
+    _build_candidate(source, q70, quality=70)
+    target = (q100.stat().st_size + q70.stat().st_size) // 2
+    assert q70.stat().st_size < target < q100.stat().st_size
+    assert source.stat().st_size > target
     sentinel = b"must remain untouched"
     fn = fit_image_heavy_pdf_first_fit if first_fit else fit_image_heavy_pdf
 
@@ -299,7 +308,7 @@ def test_image_fits_never_replace_existing_destination_created_mid_search(
             output.write_bytes(sentinel)
 
     with pytest.raises(FileExistsError):
-        fn(source, output, target_bytes=1000, progress_callback=during_search)
+        fn(source, output, target_bytes=target, progress_callback=during_search)
     assert output.read_bytes() == sentinel
     assert _sha256(source) == before
 
