@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from typing import Callable
 from math import ceil
 from pathlib import Path
-import shutil
 import tempfile
 
 from pypdf import PdfReader
@@ -18,7 +19,9 @@ from .image_fit import (
     _has_pdfa_marker,
     _has_signature_structure,
     _verify_candidate,
+    _publish_candidate_exclusively,
 )
+from .source_version import SourceChangedError, frozen_source
 from .progress import (
     ProgressCallback,
     ProgressEvent,
@@ -64,6 +67,41 @@ def fit_image_heavy_pdf_first_fit(
     min_quality: int = 70,
     min_scale: float = 1.0,
     progress_callback: ProgressCallback | None = None,
+) -> ImageFitResult:
+    """Run all quality probes from one frozen, validated source version."""
+    original = Path(input_path)
+    destination = Path(output_path)
+    if original.resolve() == destination.resolve():
+        raise ValueError("output_path must differ from input_path")
+    if destination.exists():
+        raise FileExistsError(f"output path already exists: {destination}")
+    with frozen_source(original) as source:
+        result = _fit_image_heavy_pdf_first_fit_from_snapshot(
+            source.path, destination,
+            target_bytes=target_bytes,
+            min_quality=min_quality,
+            min_scale=min_scale,
+            progress_callback=progress_callback,
+            _check_original=source.require_current,
+        )
+        try:
+            source.require_current()
+        except SourceChangedError:
+            if result.status is ImageFitStatus.FITTED:
+                destination.unlink(missing_ok=True)
+            raise
+        return replace(result, input_path=str(original))
+
+
+def _fit_image_heavy_pdf_first_fit_from_snapshot(
+    input_path: str | Path,
+    output_path: str | Path,
+    *,
+    target_bytes: int = 10_000_000,
+    min_quality: int = 70,
+    min_scale: float = 1.0,
+    progress_callback: ProgressCallback | None = None,
+    _check_original: Callable[[], None],
 ) -> ImageFitResult:
     """Fit an image-heavy PDF using a bounded stop-on-first-success policy.
 
@@ -163,6 +201,7 @@ def fit_image_heavy_pdf_first_fit(
 
     total_probes = len(_quality_probes(min_quality)) + len(_scale_probes(min_scale))
 
+    published = False
     try:
         with tempfile.TemporaryDirectory(prefix="pdf-size-fit-first-") as temp_dir_name:
             temp_dir = Path(temp_dir_name)
@@ -270,17 +309,24 @@ def fit_image_heavy_pdf_first_fit(
                     ),
                 )
 
-            shutil.copyfile(selected_candidate, output_path)
+            _check_original()
+            _publish_candidate_exclusively(selected_candidate, output_path)
+            published = True
     except Exception:
-        if output_path.exists():
-            output_path.unlink()
+        if published:
+            output_path.unlink(missing_ok=True)
         raise
 
-    _verify_candidate(input_path, output_path)
-    final_size = output_path.stat().st_size
-    if final_size > target_bytes:
-        output_path.unlink(missing_ok=True)
-        raise RuntimeError("selected output unexpectedly exceeds target after final copy")
+    try:
+        _verify_candidate(input_path, output_path)
+        final_size = output_path.stat().st_size
+        _check_original()
+        if final_size > target_bytes:
+            raise RuntimeError("selected output unexpectedly exceeds target after final copy")
+    except Exception:
+        if published:
+            output_path.unlink(missing_ok=True)
+        raise
 
     if selected_scale < 1.0:
         fit_reason = (
