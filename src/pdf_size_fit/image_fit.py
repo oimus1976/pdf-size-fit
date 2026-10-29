@@ -242,13 +242,23 @@ def _is_redundant_opaque_smask(smask: Any, *, width: int, height: int) -> bool:
     return data.strip(b"\xff") == b""
 
 
+def _safe_page_images(page: Any):
+    """Enumerate lazily; malformed image dictionaries may fail inside pypdf."""
+    try:
+        yield from page.images
+    except Exception as exc:
+        raise UnsupportedImageError(
+            f"pypdf could not enumerate/decode an image XObject: {type(exc).__name__}"
+        ) from exc
+
+
 def _find_redundant_opaque_smask_images(input_path: Path) -> frozenset[tuple[int, int]]:
     reader = PdfReader(str(input_path))
     seen: set[tuple[int, int]] = set()
     removable: set[tuple[int, int]] = set()
 
     for page in reader.pages:
-        for img in page.images:
+        for img in _safe_page_images(page):
             ref = img.indirect_reference
             if ref is None:
                 continue
@@ -358,7 +368,7 @@ def _build_candidate(
     replaced = 0
 
     for page in writer.pages:
-        for img in page.images:
+        for img in _safe_page_images(page):
             if img.indirect_reference is None:
                 continue
 
