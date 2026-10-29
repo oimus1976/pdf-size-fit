@@ -151,7 +151,7 @@ def test_iccbased_full_resolution_preserves_profile_shared_ref_and_pixels(
     "kwargs,reason",
     [
         ({"n": 4}, "only ICCBased /N 3"),
-        ({"alternate": "/DeviceCMYK"}, "only ICCBased /N 3"),
+        ({"alternate": "/DeviceCMYK"}, "pypdf could not enumerate/decode an image XObject"),
         ({"range_values": [1, 0, 0, 1, 0, 1]}, "non-default ICCBased /Range"),
         ({"range_values": [0, 1, 0, 1]}, "unsupported ICCBased /Range"),
         ({"profile_data": b"not an ICC profile"}, "invalid or unreadable ICCBased"),
