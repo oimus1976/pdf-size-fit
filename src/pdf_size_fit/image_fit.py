@@ -179,6 +179,21 @@ def _validated_iccbased_rgb_colorspace(obj: StreamObject, image: Image.Image) ->
         if normalized != [0.0, 1.0] * 3:
             raise UnsupportedImageError("non-default ICCBased /Range is unsupported")
 
+    # pypdf/Pillow can ignore the PDF-level DCT ColorTransform override.
+    # An RGB Pillow mode alone does not prove the encoded sample meaning.
+    # Until a PDF-aware decoder is available, reject explicit transform 0.
+    filters = _resolve_pdf_obj(obj.get("/Filter"))
+    filter_names = list(filters) if isinstance(filters, ArrayObject) else [filters]
+    parms = _resolve_pdf_obj(obj.get("/DecodeParms"))
+    parm_items = list(parms) if isinstance(parms, ArrayObject) else [parms]
+    if "/DCTDecode" in filter_names:
+        dct_index = filter_names.index("/DCTDecode")
+        dct_parms = _resolve_pdf_obj(parm_items[dct_index]) if dct_index < len(parm_items) else None
+        if isinstance(dct_parms, DictionaryObject) and dct_parms.get("/ColorTransform") == 0:
+            raise UnsupportedImageError(
+                "ICCBased DCT /ColorTransform 0 is unsupported: decoded RGB samples may differ from PDF rendering"
+            )
+
     if image.mode not in ("RGB", "RGBA") or (
         image.mode == "RGBA" and "/SMask" not in obj
     ):
