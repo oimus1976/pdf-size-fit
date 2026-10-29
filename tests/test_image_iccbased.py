@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,9 @@ from PIL import Image, ImageCms, ImageChops, ImageStat
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import (
     ArrayObject,
+    DictionaryObject,
     DecodedStreamObject,
+    IndirectObject,
     NameObject,
     NumberObject,
 )
@@ -25,6 +28,7 @@ from pdf_size_fit.image_fit import (
     fit_image_heavy_pdf,
 )
 from pdf_size_fit.image_first_fit import fit_image_heavy_pdf_first_fit
+from pdf_size_fit.source_version import SourceChangedError
 from tools.generate_fixtures import generate_image_heavy
 
 
@@ -240,3 +244,100 @@ def test_iccbased_target_not_met_keeps_output_absent(tmp_path: Path) -> None:
     )
     assert result.status is ImageFitStatus.TARGET_NOT_MET
     assert not output.exists()
+
+
+@pytest.mark.parametrize("first_fit", [True, False])
+def test_icc_dct_explicit_color_transform_zero_refuses_wrong_colors(
+    tmp_path: Path, first_fit: bool
+) -> None:
+    """Pillow RGB is not proof of PDF DCT ColorTransform 0 sample meaning."""
+    base = tmp_path / "base.pdf"
+    icc = tmp_path / "icc.pdf"
+    source = tmp_path / "transform-zero.pdf"
+    output = tmp_path / "must-not-exist.pdf"
+    generate_image_heavy(base, pages=1, image_size=180)
+    _make_icc_pdf(base, icc)
+    writer = PdfWriter(clone_from=str(icc))
+    img = writer.pages[0].images[0]
+    ref = img.indirect_reference
+    assert ref is not None
+    jpeg = BytesIO()
+    img.image.save(jpeg, "JPEG", quality=98, subsampling=0)
+    assert b"Adobe" not in jpeg.getvalue()
+    obj = ref.get_object()
+    obj[NameObject("/Filter")] = NameObject("/DCTDecode")
+    obj[NameObject("/DecodeParms")] = DictionaryObject(
+        {NameObject("/ColorTransform"): NumberObject(0)}
+    )
+    obj._data = jpeg.getvalue()
+    with source.open("wb") as stream:
+        writer.write(stream)
+    before = _sha256(source)
+    fn = fit_image_heavy_pdf_first_fit if first_fit else fit_image_heavy_pdf
+    result = fn(source, output, target_bytes=1000, min_quality=70)
+    assert result.status is ImageFitStatus.UNSUPPORTED_IMAGE
+    assert any("ColorTransform 0" in reason for reason in result.reasons)
+    assert not output.exists()
+    assert _sha256(source) == before
+
+
+@pytest.mark.parametrize("first_fit", [True, False])
+def test_image_fits_never_replace_existing_destination_created_mid_search(
+    tmp_path: Path, first_fit: bool
+) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "icc.pdf"
+    output = tmp_path / "other-writers-file.pdf"
+    generate_image_heavy(base, pages=1, image_size=200)
+    _make_icc_pdf(base, source)
+    before = _sha256(source)
+    sentinel = b"must remain untouched"
+    fn = fit_image_heavy_pdf_first_fit if first_fit else fit_image_heavy_pdf
+
+    def during_search(event) -> None:
+        if not output.exists():
+            output.write_bytes(sentinel)
+
+    with pytest.raises(FileExistsError):
+        fn(source, output, target_bytes=1000, progress_callback=during_search)
+    assert output.read_bytes() == sentinel
+    assert _sha256(source) == before
+
+
+@pytest.mark.parametrize("first_fit", [True, False])
+def test_image_fits_refuse_modified_original_during_search(
+    tmp_path: Path, first_fit: bool
+) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "icc-unchanged-at-start.pdf"
+    output = tmp_path / "not-published.pdf"
+    generate_image_heavy(base, pages=1, image_size=200)
+    # Synthetic metadata marker, not a signature or an actual private PDF.
+    writer = PdfWriter(clone_from=str(base))
+    writer.root_object[NameObject("/Dummy")] = DictionaryObject()
+    with source.open("wb") as stream:
+        writer.write(stream)
+    assert b"/Dummy" in source.read_bytes()
+    fn = fit_image_heavy_pdf_first_fit if first_fit else fit_image_heavy_pdf
+
+    def during_search(event) -> None:
+        contents = source.read_bytes()
+        if b"/Dummy" in contents:
+            source.write_bytes(contents.replace(b"/Dummy", b"/Perms", 1))
+
+    with pytest.raises(SourceChangedError):
+        fn(source, output, target_bytes=1000, progress_callback=during_search)
+    assert not output.exists()
+
+
+def test_iccbased_mask_reference_remains_indirect(tmp_path: Path) -> None:
+    base = tmp_path / "base.pdf"
+    source = tmp_path / "icc.pdf"
+    output = tmp_path / "fitted.pdf"
+    _transparent_source(base)
+    _make_icc_pdf(base, source)
+    source_obj = PdfReader(str(source)).pages[0].images[0].indirect_reference.get_object()
+    assert isinstance(source_obj.raw_get("/SMask"), IndirectObject)
+    _build_candidate(source, output, quality=85, scale=1.0)
+    output_obj = PdfReader(str(output)).pages[0].images[0].indirect_reference.get_object()
+    assert isinstance(output_obj.raw_get("/SMask"), IndirectObject)
