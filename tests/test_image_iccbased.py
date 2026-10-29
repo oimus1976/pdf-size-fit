@@ -214,7 +214,7 @@ def test_iccbased_full_resolution_preserves_nonopaque_soft_mask(tmp_path: Path) 
     source = tmp_path / "icc-smask.pdf"
     output = tmp_path / "fit.pdf"
     _transparent_source(base)
-    _make_icc_pdf(base, source)
+    profile_bytes = _make_icc_pdf(base, source)
     source_reader = PdfReader(str(source))
     obj = source_reader.pages[0].images[0].indirect_reference.get_object()
     old_mask = obj["/SMask"].get_object().get_data()
@@ -222,7 +222,7 @@ def test_iccbased_full_resolution_preserves_nonopaque_soft_mask(tmp_path: Path) 
     assert _build_candidate(source, output, quality=85, scale=1.0) == 1
     _, fitted_obj, profile = _icc_obj(PdfReader(str(output)))
     assert fitted_obj["/SMask"].get_object().get_data() == old_mask
-    assert profile.get_data() == _srgb_profile()
+    assert profile.get_data() == profile_bytes
 
     with pytest.raises(UnsupportedImageError, match="non-redundant or unproven /SMask"):
         _build_candidate(source, tmp_path / "no-scaled.pdf", quality=85, scale=0.80)
